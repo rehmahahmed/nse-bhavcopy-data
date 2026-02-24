@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas pyotp SmartApi-python numpy requests
+          pip install pandas pyotp SmartApi-python numpy requests logzero
 
       - name: Run Angel Data Fetch and RS Calculation
         env:
