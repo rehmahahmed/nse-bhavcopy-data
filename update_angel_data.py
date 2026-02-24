@@ -156,6 +156,13 @@ df_combined['RS'] = np.where(df_combined['RS'] == 100, 99, df_combined['RS'])
 # Clean up and keep necessary columns, including weighted_avg
 df_final = df_combined[['Date', 'Symbol', 'Close', 'weighted_avg', 'RS']]
 
+# Merge with the Nifty 500 CSV to bring in the Industry column
+# This looks up the Symbol and attaches the matching Industry
+df_final = pd.merge(df_final, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
+
+# Reorder the columns to make it clean for Power BI
+df_final = df_final[['Date', 'Symbol', 'Industry', 'Close', 'weighted_avg', 'RS']]
+
 # Save the master file back to the root directory
 df_final.to_csv(CSV_FILENAME, index=False)
-print(f"Success! Master database '{CSV_FILENAME}' has been updated.")
+print(f"Success! Master database '{CSV_FILENAME}' has been updated with Industry data.")
