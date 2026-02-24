@@ -153,8 +153,8 @@ df_combined['RS'] = df_combined.groupby('Date')['weighted_avg'].transform(calcul
 df_combined['RS'] = np.where(df_combined['RS'] == 0, 1, df_combined['RS'])
 df_combined['RS'] = np.where(df_combined['RS'] == 100, 99, df_combined['RS'])
 
-# Clean up and keep only necessary columns
-df_final = df_combined[['Date', 'Symbol', 'Close', 'RS']]
+# Clean up and keep necessary columns, including weighted_avg
+df_final = df_combined[['Date', 'Symbol', 'Close', 'weighted_avg', 'RS']]
 
 # Save the master file back to the root directory
 df_final.to_csv(CSV_FILENAME, index=False)
