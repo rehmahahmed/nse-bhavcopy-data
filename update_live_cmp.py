@@ -46,17 +46,21 @@ for symbol in nifty500_symbols:
     if symbol_str not in token_map: continue
     
     try:
-        # Angel One's dedicated endpoint for live quotes
         ltp_response = smartApi.getLTPData("NSE", f"{symbol_str}-EQ", token_map[symbol_str])
         
         if ltp_response['status'] and ltp_response['data']:
             live_data.append({
                 'Symbol': symbol_str,
                 'CMP': ltp_response['data']['ltp'],
-                'Last_Updated': ltp_response['data']['updatetime'] # Adds a timestamp so you know it's fresh
+                'Last_Updated': ltp_response['data']['updatetime']
             })
+        else:
+            # Print the API's complaint if the status is False
+            print(f"Failed for {symbol_str}: {ltp_response.get('message', 'Unknown error')}")
+            
     except Exception as e:
-        pass
+        # Stop hiding the error!
+        print(f"Code error on {symbol_str}: {e}")
     
     time.sleep(0.4) # Respect rate limits
 
