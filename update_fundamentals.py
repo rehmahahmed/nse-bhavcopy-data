@@ -36,8 +36,16 @@ for i, symbol in enumerate(symbols):
         info = ticker.info
         
         # Extract metrics (multiplying by 100 to convert decimals to percentages)
+        # Extract metrics (multiplying by 100 to convert decimals to percentages)
         qoq_profit = info.get('earningsQuarterlyGrowth')
+        
+        # --- THE FIX ---
+        # Try revenueQuarterlyGrowth first. If it's empty, use revenueGrowth
         qoq_sales = info.get('revenueQuarterlyGrowth')
+        if qoq_sales is None:
+            qoq_sales = info.get('revenueGrowth')
+        # ---------------
+            
         opm = info.get('operatingMargins')
         
         fundamental_data.append({
