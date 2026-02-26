@@ -1,0 +1,37 @@
+name: Weekly Fundamentals Update
+
+on:
+  schedule:
+    # Runs at 02:00 UTC every Sunday (once every 7 days)
+    - cron: '0 2 * * 0'
+  workflow_dispatch: # Allows you to run it manually from the Actions tab
+
+jobs:
+  update-fundamentals:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas yfinance numpy
+
+      - name: Run Fundamental Data Script
+        run: python update_fundamentals.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add nifty500_fundamentals.csv
+          # Only commit if the CSV actually changed
+          git diff --quiet && git diff --staged --quiet || git commit -m "Automated weekly update: nifty500_fundamentals.csv"
+          git push
