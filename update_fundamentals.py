@@ -37,20 +37,20 @@ for i, symbol in enumerate(symbols):
         
         # Extract metrics (multiplying by 100 to convert decimals to percentages)
         # Extract metrics (multiplying by 100 to convert decimals to percentages)
+        # Extract metrics (multiplying by 100 to convert decimals to percentages)
         qoq_profit = info.get('earningsQuarterlyGrowth')
         
-        # --- THE FIX ---
         # Try revenueQuarterlyGrowth first. If it's empty, use revenueGrowth
         qoq_sales = info.get('revenueQuarterlyGrowth')
         if qoq_sales is None:
             qoq_sales = info.get('revenueGrowth')
-        # ---------------
             
         opm = info.get('operatingMargins')
         
         fundamental_data.append({
             'Symbol': symbol,
             'Qtr Profit Var %': round(qoq_profit * 100, 2) if qoq_profit is not None else np.nan,
+            'QoQ profits %': round(qoq_profit * 100, 2) if qoq_profit is not None else np.nan, # <-- Added this!
             'QoQ sales %': round(qoq_sales * 100, 2) if qoq_sales is not None else np.nan,
             'OPM': round(opm * 100, 2) if opm is not None else np.nan
         })
@@ -59,10 +59,10 @@ for i, symbol in enumerate(symbols):
         fundamental_data.append({
             'Symbol': symbol, 
             'Qtr Profit Var %': np.nan, 
+            'QoQ profits %': np.nan, # <-- Added this!
             'QoQ sales %': np.nan, 
             'OPM': np.nan
         })
-        
     # Print progress to the GitHub Actions console
     if (i + 1) % 50 == 0:
         print(f"Processed {i + 1} / {len(symbols)} stocks...")
