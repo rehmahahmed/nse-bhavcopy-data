@@ -1,59 +1,35 @@
-name: Intraday CMP Fetcher (8x Daily)
+name: Live Market Price Update to Power BI
 
 on:
   schedule:
-    # 9:15 AM IST
-    - cron: '45 3 * * 1-5'
-    # 10:00 AM IST
-    - cron: '30 4 * * 1-5'
-    # 10:45 AM IST
-    - cron: '15 5 * * 1-5'
-    # 11:30 AM IST
-    - cron: '0 6 * * 1-5'
-    # 12:15 PM IST
-    - cron: '45 6 * * 1-5'
-    # 1:00 PM IST
-    - cron: '30 7 * * 1-5'
-    # 1:45 PM IST
-    - cron: '15 8 * * 1-5'
-    # 2:30 PM IST
-    - cron: '0 9 * * 1-5'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    # Runs every 5 minutes from Monday to Friday
+    - cron: '*/5 * * * 1-5'
+  workflow_dispatch: 
 
 jobs:
-  update-cmp:
+  update-live-prices:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install Dependencies
+        # Added requests library for the Power BI API
         run: |
-          pip install pandas pyotp SmartApi-python requests logzero websocket-client
+          python -m pip install --upgrade pip
+          pip install pandas pyotp smartapi-python requests
 
-      - name: Run Intraday CMP Fetch
+      - name: Run Live Script & Push to Power BI
         env:
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
-        run: python update_live_cmp.py
-
-      - name: Commit and Push Live Data
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # The '|| true' prevents Git from crashing if the file is missing
-          git add live_cmp.csv || true
-          
-          git commit -m "Automated CMP update" || echo "No new data to commit"
-          git push
+          POWER_BI_PUSH_URL: ${{ secrets.POWER_BI_PUSH_URL }}
+        run: python update_live_csv.py
