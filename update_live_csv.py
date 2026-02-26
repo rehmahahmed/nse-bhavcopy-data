@@ -4,7 +4,6 @@ import json
 import time
 import pyotp
 import os
-import requests
 import datetime
 from SmartApi import SmartConnect
 
@@ -15,7 +14,6 @@ API_KEY = os.environ.get("ANGEL_API_KEY")
 CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
 PIN = os.environ.get("ANGEL_PIN")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
-POWER_BI_URL = os.environ.get("POWER_BI_PUSH_URL") # Ensure this secret is set!
 
 # ==========================================
 # 2. LOGIN & FETCH TOKENS
@@ -52,12 +50,10 @@ for symbol in nifty500_symbols:
         ltp_response = smartApi.getLTPData("NSE", f"{symbol_str}-EQ", token_map[symbol_str])
         
         if ltp_response['status'] and ltp_response['data']:
-            # Format expected by Power BI API
             live_data.append({
                 "Symbol": symbol_str,
-                # Force CMP to be a float (decimal) so Power BI accepts it
                 "CMP": float(ltp_response['data']['ltp']),
-                "Last_Updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                "Last_Updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
         else:
             print(f"Failed for {symbol_str}: {ltp_response.get('message', 'Unknown error')}")
@@ -68,18 +64,11 @@ for symbol in nifty500_symbols:
     time.sleep(0.4) # Respect rate limits
 
 # ==========================================
-# 4. PUSH DIRECTLY TO POWER BI
+# 4. SAVE DIRECTLY TO CSV
 # ==========================================
 if live_data:
-    print(f"Pushing {len(live_data)} records to Power BI...")
-    headers = {"Content-Type": "application/json"}
-    
-    response = requests.post(POWER_BI_URL, json=live_data, headers=headers)
-    
-    if response.status_code == 200:
-        print("Successfully pushed live data to Power BI!")
-    else:
-        print(f"Failed to push to Power BI. Status Code: {response.status_code}")
-        print(response.text)
+    df_live = pd.DataFrame(live_data)
+    df_live.to_csv('live_cmp.csv', index=False)
+    print(f"Successfully updated live_cmp.csv with {len(df_live)} stocks.")
 else:
-    print("No data fetched. Nothing to push.")
+    print("No data fetched. CSV was not updated.")
