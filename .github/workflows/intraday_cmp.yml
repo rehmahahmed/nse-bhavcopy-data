@@ -1,13 +1,21 @@
-name: Live Market Price Update to Power BI
+name: 45-Min Market Price Update
 
 on:
   schedule:
-    # Runs every 5 minutes from Monday to Friday
-    - cron: '*/5 * * * 1-5'
+    # 45-minute intervals during Indian Market Hours (Converted to UTC)
+    - cron: '45 3 * * 1-5'  # 09:15 AM IST
+    - cron: '30 4 * * 1-5'  # 10:00 AM IST
+    - cron: '15 5 * * 1-5'  # 10:45 AM IST
+    - cron: '0 6 * * 1-5'   # 11:30 AM IST
+    - cron: '45 6 * * 1-5'  # 12:15 PM IST
+    - cron: '30 7 * * 1-5'  # 01:00 PM IST
+    - cron: '15 8 * * 1-5'  # 01:45 PM IST
+    - cron: '0 9 * * 1-5'   # 02:30 PM IST
+    - cron: '45 9 * * 1-5'  # 03:15 PM IST
   workflow_dispatch: 
 
 jobs:
-  update-live-prices:
+  update-live-csv:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,16 +28,30 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        # Added requests library for the Power BI API
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyotp smartapi-python requests logzero websocket-client
+          pip install pandas pyotp smartapi-python logzero websocket-client
 
-      - name: Run Live Script & Push to Power BI
+      - name: Run Script to generate CSV
         env:
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
-          POWER_BI_PUSH_URL: ${{ secrets.POWER_BI_PUSH_URL }}
         run: python update_live_csv.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Pull latest changes to avoid push conflicts
+          git pull origin main --rebase
+          
+          if [ -f live_cmp.csv ]; then
+            git add live_cmp.csv
+            git diff --quiet && git diff --staged --quiet || git commit -m "Automated 45-min live_cmp.csv update"
+            git push origin main
+          else
+            echo "live_cmp.csv was not generated. Skipping commit."
+          fi
