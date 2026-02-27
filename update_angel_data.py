@@ -119,7 +119,7 @@ if df_combined.empty:
     print("No data available to process.")
     exit()
 
-print("Calculating RS and Return percentages...")
+print("Calculating RS, Return percentages, and Sharpe...")
 
 df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
 
@@ -155,20 +155,35 @@ df_combined['1M Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(
 df_combined['3M Return %'] = (df_combined['ret_3m'] * 100).round(2)
 df_combined['6M Return %'] = (df_combined['ret_6m'] * 100).round(2)
 
+# --- NEW: CALCULATE ROLLING SHARPE RATIO ---
+# 1. Calculate raw daily decimal returns
+df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
+
+# 2. Calculate rolling 252-day mean and standard deviation (minimum 126 days/6 months required)
+rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
+rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
+
+# 3. Apply Annualized Sharpe Formula (Assume 5% Indian Risk-Free Rate)
+risk_free_rate = 0.05
+daily_rf = risk_free_rate / 252
+
+df_combined['Sharpe'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
+df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
+
 # ==========================================
 # 6. FINAL CLEANUP & MERGE
 # ==========================================
 # Merge with the Nifty 500 list to bring in the Industry column
 df_final = pd.merge(df_combined, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
 
-# Reorder columns perfectly for Power BI, including the new returns
+# Reorder columns perfectly for Power BI, including the new returns and Sharpe
 final_columns = [
     'Date', 'Symbol', 'Industry', 'Open', 'High', 'Low', 'Close', 'Volume', 
     '1D Return %', '1W Return %', '1M Return %', '3M Return %', '6M Return %', 
-    'weighted_avg', 'RS'
+    'Sharpe', 'weighted_avg', 'RS'
 ]
 df_final = df_final[final_columns]
 
 # Save the master file back to the root directory
 df_final.to_csv(CSV_FILENAME, index=False)
-print(f"Success! Master database '{CSV_FILENAME}' has been updated with Return % columns.")
+print(f"Success! Master database '{CSV_FILENAME}' has been updated with Return % columns and Sharpe Ratio.")
