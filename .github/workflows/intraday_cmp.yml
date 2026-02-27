@@ -45,12 +45,17 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Pull latest changes to avoid push conflicts
-          git pull origin main --rebase
-          
           if [ -f live_cmp.csv ]; then
+            # 1. ADD the new file first so Git knows it is safe
             git add live_cmp.csv
+            
+            # 2. COMMIT the file (only if there are actual price changes)
             git diff --quiet && git diff --staged --quiet || git commit -m "Automated 45-min live_cmp.csv update"
+            
+            # 3. PULL any background changes smoothly using rebase
+            git pull origin main --rebase
+            
+            # 4. PUSH to your repo
             git push origin main
           else
             echo "live_cmp.csv was not generated. Skipping commit."
