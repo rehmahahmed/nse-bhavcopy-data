@@ -47,7 +47,7 @@ for symbol in nifty500_symbols:
     if symbol_str not in token_map: continue
     
     try:
-        ltp_response = smartApi.getLTPData("NSE", f"{symbol_str}-EQ", token_map[symbol_str])
+        ltp_response = smartApi.ltpData("NSE", f"{symbol_str}-EQ", token_map[symbol_str])
         
         if ltp_response['status'] and ltp_response['data']:
             live_data.append({
