@@ -173,7 +173,11 @@ df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
 # ==========================================
 # 6. FINAL CLEANUP & MERGE
 # ==========================================
-# Merge with the Nifty 500 list to bring in the Industry column
+# Prevent Industry_x/Industry_y conflicts by dropping the old column before merging
+if 'Industry' in df_combined.columns:
+    df_combined = df_combined.drop(columns=['Industry'])
+
+# Merge with the Nifty 500 list to bring in the fresh Industry column
 df_final = pd.merge(df_combined, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
 
 # Reorder columns perfectly for Power BI, including the new returns and Sharpe
