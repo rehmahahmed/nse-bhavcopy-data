@@ -20,7 +20,7 @@ CSV_FILENAME = "daily_rs_data.csv"
 INTERVAL = "ONE_DAY"
 
 # ==========================================
-# 2. SMART DATE CALCULATION
+# 2. SMART DATE CALCULATION (SELF-HEALING)
 # ==========================================
 end_date = datetime.datetime.now()
 TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
@@ -31,10 +31,13 @@ if os.path.exists(CSV_FILENAME) and os.path.getsize(CSV_FILENAME) > 0:
     df_existing['Date'] = pd.to_datetime(df_existing['Date'])
     
     last_date = df_existing['Date'].max()
-    start_date = last_date + datetime.timedelta(days=1)
     
-    print(f"Existing data up to {last_date.strftime('%Y-%m-%d')}.")
-    print(f"Fetching missing data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
+    # OVERLAPPING WINDOW: Always look back 10 days from today.
+    # This automatically catches missing days (like your 27th) and updates any recent anomalies.
+    start_date = end_date - datetime.timedelta(days=10)
+    
+    print(f"Database goes up to {last_date.strftime('%Y-%m-%d')}.")
+    print(f"Fetching 10-day overlap from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} to heal gaps...")
 else:
     print("No existing database found. Fetching full 5-year history...")
     df_existing = pd.DataFrame()
