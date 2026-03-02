@@ -170,6 +170,16 @@ daily_rf = risk_free_rate / 252
 df_combined['Sharpe'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
 df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
 
+# --- NEW: SHIFT CALCULATED METRICS FORWARD BY 1 DAY ---
+# This ensures that "yesterday's" returns and metrics show up on "today's" row for the dashboard.
+metrics_to_shift = [
+    '1D Return %', '1W Return %', '1M Return %', 
+    '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS'
+]
+
+# Group by Symbol and shift the selected columns down by exactly 1 row
+df_combined[metrics_to_shift] = df_combined.groupby('Symbol')[metrics_to_shift].shift(1)
+
 # ==========================================
 # 6. FINAL CLEANUP & MERGE
 # ==========================================
