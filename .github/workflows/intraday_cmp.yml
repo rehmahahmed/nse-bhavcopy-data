@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Updated to v4 for better performance and node versioning
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -49,14 +49,19 @@ jobs:
             # 1. ADD the new file first so Git knows it is safe
             git add live_cmp.csv
             
-            # 2. COMMIT the file (only if there are actual price changes)
-            git diff --quiet && git diff --staged --quiet || git commit -m "Automated 45-min live_cmp.csv update"
-            
-            # 3. PULL any background changes smoothly using rebase
-            git pull origin main --rebase
-            
-            # 4. PUSH to your repo
-            git push origin main
+            # 2. CHECK for changes and COMMIT
+            if ! git diff --staged --quiet; then
+              git commit -m "Automated 45-min live_cmp.csv update"
+              
+              # 3. PULL background changes smoothly using rebase
+              # '-X theirs' auto-resolves conflicts by prioritizing your newly generated local file
+              git pull origin main --rebase -X theirs
+              
+              # 4. PUSH to your repo
+              git push origin main
+            else
+              echo "No changes in live_cmp.csv to commit."
+            fi
           else
             echo "live_cmp.csv was not generated. Skipping commit."
           fi
