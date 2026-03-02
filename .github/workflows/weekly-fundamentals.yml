@@ -6,16 +6,19 @@ on:
     - cron: '0 2 * * 0'
   workflow_dispatch: # Allows you to run it manually from the Actions tab
 
+permissions:
+  contents: write # Crucial: Allows the bot to save the CSV back to your repo
+
 jobs:
   update-fundamentals:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -29,9 +32,26 @@ jobs:
 
       - name: Commit and Push changes
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add nifty500_fundamentals.csv
-          # Only commit if the CSV actually changed
-          git diff --quiet && git diff --staged --quiet || git commit -m "Automated weekly update: nifty500_fundamentals.csv"
-          git push
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          if [ -f nifty500_fundamentals.csv ]; then
+            # 1. ADD the new file
+            git add nifty500_fundamentals.csv
+            
+            # 2. CHECK for changes and COMMIT
+            if ! git diff --staged --quiet; then
+              git commit -m "Automated weekly update: nifty500_fundamentals.csv"
+              
+              # 3. PULL background changes smoothly using rebase
+              # '-X theirs' prioritizes your newly generated local file if there's a conflict
+              git pull origin main --rebase -X theirs
+              
+              # 4. PUSH to your repo
+              git push origin main
+            else
+              echo "No changes in nifty500_fundamentals.csv to commit."
+            fi
+          else
+            echo "nifty500_fundamentals.csv was not generated. Skipping commit."
+          fi
