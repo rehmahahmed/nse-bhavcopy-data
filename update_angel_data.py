@@ -167,8 +167,35 @@ rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambd
 rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
 
 # 3. Apply Annualized Sharpe Formula (Assume 5% Indian Risk-Free Rate)
-risk_free_rate = 0.05
-daily_rf = risk_free_rate / 252
+# --- NEW: CALCULATE ROLLING SHARPE RATIO (DYNAMIC YIELD) ---
+# 1. Calculate raw daily decimal returns
+df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
+
+# 2. Calculate rolling 252-day mean and standard deviation (minimum 126 days/6 months required)
+rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
+rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
+
+# 3. Fetch Live Risk-Free Rate (India 10-Year Bond)
+try:
+    print("Fetching live India 10-Year Bond yield for Sharpe calculation...")
+    # Fetch the latest daily data for the bond
+    bond_ticker = yf.Ticker("^IN10YT")
+    bond_data = bond_ticker.history(period="1d")
+    
+    if not bond_data.empty:
+        # yfinance returns the yield as a whole number (e.g., 7.05 for 7.05%), so we divide by 100
+        live_risk_free_rate = bond_data['Close'].iloc[-1] / 100.0
+        print(f"Live Risk-Free Rate acquired: {live_risk_free_rate * 100:.2f}%")
+    else:
+        raise ValueError("Yahoo Finance returned empty DataFrame.")
+        
+except Exception as e:
+    # Failsafe: If Yahoo Finance is down or throttling your IP, default to a sensible baseline
+    print(f"Warning: Could not fetch live bond yield ({e}). Defaulting to 7.0%.")
+    live_risk_free_rate = 0.07
+
+# 4. Apply Annualized Sharpe Formula
+daily_rf = live_risk_free_rate / 252
 
 df_combined['Sharpe'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
 df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
