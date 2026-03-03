@@ -7,7 +7,7 @@ import pyotp
 import numpy as np
 import os
 from SmartApi import SmartConnect
-
+import yfinance as yf
 # ==========================================
 # 1. CREDENTIALS FROM GITHUB SECRETS
 # ==========================================
