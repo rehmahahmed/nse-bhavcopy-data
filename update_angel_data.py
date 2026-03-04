@@ -8,17 +8,20 @@ import numpy as np
 import os
 from SmartApi import SmartConnect
 import yfinance as yf
-from pandas.tseries.offsets import BDay # Added for business day calculations
 
 # ==========================================
-# 1. CREDENTIALS FROM GITHUB SECRETS
+# 1. CREDENTIALS & CONFIGURATION
 # ==========================================
 API_KEY = os.environ.get("ANGEL_API_KEY")
 CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
 PIN = os.environ.get("ANGEL_PIN")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
 
-CSV_FILENAME = "daily_rs_data.csv"
+# The background database needed to calculate rolling metrics (Sharpe, 6M returns, etc.)
+HISTORY_FILENAME = "historical_db.csv" 
+# The final 500-row dashboard output file you requested
+CSV_FILENAME = "daily_rs_data.csv" 
+
 INTERVAL = "ONE_DAY"
 
 # ==========================================
@@ -27,20 +30,19 @@ INTERVAL = "ONE_DAY"
 end_date = datetime.datetime.now()
 TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
 
-if os.path.exists(CSV_FILENAME) and os.path.getsize(CSV_FILENAME) > 0:
-    print(f"Loading existing database: {CSV_FILENAME}")
-    df_existing = pd.read_csv(CSV_FILENAME)
+# We now load from the HISTORY file, not the 500-row dashboard file
+if os.path.exists(HISTORY_FILENAME) and os.path.getsize(HISTORY_FILENAME) > 0:
+    print(f"Loading existing historical database: {HISTORY_FILENAME}")
+    df_existing = pd.read_csv(HISTORY_FILENAME)
     df_existing['Date'] = pd.to_datetime(df_existing['Date'])
     
     last_date = df_existing['Date'].max()
     
-    # OVERLAPPING WINDOW: Always look back 10 days from today.
+    # OVERLAPPING WINDOW: Look back 10 days to heal gaps
     start_date = end_date - datetime.timedelta(days=10)
-    
-    print(f"Database goes up to {last_date.strftime('%Y-%m-%d')}.")
-    print(f"Fetching 10-day overlap from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')} to heal gaps...")
+    print(f"Fetching 10-day overlap from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
 else:
-    print("No existing database found. Fetching full 5-year history...")
+    print("No existing historical database found. Fetching full 5-year history...")
     df_existing = pd.DataFrame()
     start_date = end_date - datetime.timedelta(days=5*365)
 
@@ -112,7 +114,6 @@ if new_data_rows:
     
     if not df_existing.empty:
         df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-        # Keep 'last' ensures the fresh API data overwrites yesterday's placeholder row
         df_combined = df_combined.drop_duplicates(subset=['Date', 'Symbol'], keep='last')
     else:
         df_combined = df_new
@@ -124,10 +125,7 @@ if df_combined.empty:
     print("No data available to process.")
     exit()
 
-# NEW: Remove any lingering future rows from previous runs before calculating math.
-# If 'Close' is NaN, it's a placeholder row. We drop it so our rolling math is accurate.
 df_combined = df_combined.dropna(subset=['Close'])
-
 print("Calculating RS, Return percentages, and Sharpe...")
 df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
 
@@ -135,7 +133,6 @@ df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=Tr
 DAYS_1D, DAYS_1W, DAYS_1M = 1, 5, 21
 DAYS_3M, DAYS_6M, DAYS_9M, DAYS_12M = 63, 126, 189, 252
 
-# Base decimal calculations for the RS math
 df_combined['ret_3m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_3M)
 df_combined['ret_6m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_6M)
 df_combined['ret_9m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_9M)
@@ -156,14 +153,12 @@ df_combined['RS'] = df_combined.groupby('Date')['weighted_avg'].transform(calcul
 df_combined['RS'] = np.where(df_combined['RS'] == 0, 1, df_combined['RS'])
 df_combined['RS'] = np.where(df_combined['RS'] == 100, 99, df_combined['RS'])
 
-# Calculate the new Display Return % columns
 df_combined['1D Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1D) * 100).round(2)
 df_combined['1W Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1W) * 100).round(2)
 df_combined['1M Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1M) * 100).round(2)
 df_combined['3M Return %'] = (df_combined['ret_3m'] * 100).round(2)
 df_combined['6M Return %'] = (df_combined['ret_6m'] * 100).round(2)
 
-# Calculate Sharpe Ratio (Cleaned up duplicate calculation)
 df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
 rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
 rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
@@ -172,59 +167,40 @@ try:
     print("Fetching live India 10-Year Bond yield for Sharpe calculation...")
     bond_ticker = yf.Ticker("^IN10YT")
     bond_data = bond_ticker.history(period="1d")
-    
     if not bond_data.empty:
         live_risk_free_rate = bond_data['Close'].iloc[-1] / 100.0
-        print(f"Live Risk-Free Rate acquired: {live_risk_free_rate * 100:.2f}%")
     else:
-        raise ValueError("Yahoo Finance returned empty DataFrame.")
-except Exception as e:
-    print(f"Warning: Could not fetch live bond yield ({e}). Defaulting to 7.0%.")
+        raise ValueError("Empty DataFrame.")
+except Exception:
     live_risk_free_rate = 0.07
 
 daily_rf = live_risk_free_rate / 252
 df_combined['Sharpe'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
 df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
 
-# ==========================================
-# 6. SHIFT METRICS TO TOMORROW'S ROW
-# ==========================================
-# 1. Calculate the next trading day
-last_date = df_combined['Date'].max()
-next_trading_day = last_date + BDay(1)
-
-# 2. Create a blank row for tomorrow for every symbol
-symbols = df_combined['Symbol'].unique()
-tomorrow_df = pd.DataFrame({'Date': next_trading_day, 'Symbol': symbols})
-
-# 3. Combine the blank rows into the main dataset and sort
-df_combined = pd.concat([df_combined, tomorrow_df], ignore_index=True)
-df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
-
-# 4. Shift ONLY the calculation columns down by 1 row
-metrics_to_shift = [
-    '1D Return %', '1W Return %', '1M Return %', 
-    '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS'
-]
-df_combined[metrics_to_shift] = df_combined.groupby('Symbol')[metrics_to_shift].shift(1)
+# Save the historical database so tomorrow's script has data to work with
+df_combined.to_csv(HISTORY_FILENAME, index=False)
 
 # ==========================================
-# 7. FINAL CLEANUP & MERGE
+# 6. EXTRACT 500 ROWS FOR DASHBOARD (NO DATES)
 # ==========================================
-if 'Industry' in df_combined.columns:
-    df_combined = df_combined.drop(columns=['Industry'])
+print("Extracting the latest 500 rows for the dashboard...")
 
-df_final = pd.merge(df_combined, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
+# Get ONLY the very last row for each symbol (Yesterday's Close)
+df_latest = df_combined.groupby('Symbol').tail(1).copy()
 
-# Convert dates to cleanly formatted strings for the CSV
-df_final['Date'] = df_final['Date'].dt.strftime('%Y-%m-%d')
+# Add the Industry column
+if 'Industry' in df_latest.columns:
+    df_latest = df_latest.drop(columns=['Industry'])
+df_final = pd.merge(df_latest, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
 
+# Keep ONLY the columns you requested (No Date, No Open, High, Low, Close, Volume)
 final_columns = [
-    'Date', 'Symbol', 'Industry', 'Open', 'High', 'Low', 'Close', 'Volume', 
-    '1D Return %', '1W Return %', '1M Return %', '3M Return %', '6M Return %', 
-    'Sharpe', 'weighted_avg', 'RS'
+    'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
+    '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS'
 ]
 df_final = df_final[final_columns]
 
+# Overwrite the daily_rs_data.csv with exactly 500 rows
 df_final.to_csv(CSV_FILENAME, index=False)
-print(f"Success! Master database '{CSV_FILENAME}' has been updated with Return % columns and Sharpe Ratio.")
+print(f"Success! Dashboard file '{CSV_FILENAME}' generated with 500 rows and no dates.")
