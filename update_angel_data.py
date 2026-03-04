@@ -182,7 +182,7 @@ df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
 df_combined.to_csv(HISTORY_FILENAME, index=False)
 
 # ==========================================
-# 6. EXTRACT 500 ROWS FOR DASHBOARD (NO DATES)
+# 6. EXTRACT 500 ROWS FOR DASHBOARD 
 # ==========================================
 print("Extracting the latest 500 rows for the dashboard...")
 
@@ -194,13 +194,18 @@ if 'Industry' in df_latest.columns:
     df_latest = df_latest.drop(columns=['Industry'])
 df_final = pd.merge(df_latest, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
 
-# Keep ONLY the columns you requested (No Date, No Open, High, Low, Close, Volume)
+# --- NEW: ADD LAST UPDATED TIMESTAMP ---
+# Grab the current system time and format it cleanly
+update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+df_final['Last_Updated'] = update_time_str
+
+# Keep ONLY the columns you requested, plus the new timestamp
 final_columns = [
     'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
-    '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS'
+    '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS', 'Last_Updated'
 ]
 df_final = df_final[final_columns]
 
 # Overwrite the daily_rs_data.csv with exactly 500 rows
 df_final.to_csv(CSV_FILENAME, index=False)
-print(f"Success! Dashboard file '{CSV_FILENAME}' generated with 500 rows and no dates.")
+print(f"Success! Dashboard file '{CSV_FILENAME}' generated. Last Updated: {update_time_str}")
