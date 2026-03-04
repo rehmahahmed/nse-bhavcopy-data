@@ -8,6 +8,8 @@ import numpy as np
 import os
 from SmartApi import SmartConnect
 import yfinance as yf
+from pandas.tseries.offsets import BDay # Added for business day calculations
+
 # ==========================================
 # 1. CREDENTIALS FROM GITHUB SECRETS
 # ==========================================
@@ -33,7 +35,6 @@ if os.path.exists(CSV_FILENAME) and os.path.getsize(CSV_FILENAME) > 0:
     last_date = df_existing['Date'].max()
     
     # OVERLAPPING WINDOW: Always look back 10 days from today.
-    # This automatically catches missing days (like your 27th) and updates any recent anomalies.
     start_date = end_date - datetime.timedelta(days=10)
     
     print(f"Database goes up to {last_date.strftime('%Y-%m-%d')}.")
@@ -111,6 +112,7 @@ if new_data_rows:
     
     if not df_existing.empty:
         df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+        # Keep 'last' ensures the fresh API data overwrites yesterday's placeholder row
         df_combined = df_combined.drop_duplicates(subset=['Date', 'Symbol'], keep='last')
     else:
         df_combined = df_new
@@ -122,8 +124,11 @@ if df_combined.empty:
     print("No data available to process.")
     exit()
 
-print("Calculating RS, Return percentages, and Sharpe...")
+# NEW: Remove any lingering future rows from previous runs before calculating math.
+# If 'Close' is NaN, it's a placeholder row. We drop it so our rolling math is accurate.
+df_combined = df_combined.dropna(subset=['Close'])
 
+print("Calculating RS, Return percentages, and Sharpe...")
 df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
 
 # Define trading day periods
@@ -158,69 +163,62 @@ df_combined['1M Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(
 df_combined['3M Return %'] = (df_combined['ret_3m'] * 100).round(2)
 df_combined['6M Return %'] = (df_combined['ret_6m'] * 100).round(2)
 
-# --- NEW: CALCULATE ROLLING SHARPE RATIO ---
-# 1. Calculate raw daily decimal returns
+# Calculate Sharpe Ratio (Cleaned up duplicate calculation)
 df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
-
-# 2. Calculate rolling 252-day mean and standard deviation (minimum 126 days/6 months required)
 rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
 rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
 
-# 3. Apply Annualized Sharpe Formula (Assume 5% Indian Risk-Free Rate)
-# --- NEW: CALCULATE ROLLING SHARPE RATIO (DYNAMIC YIELD) ---
-# 1. Calculate raw daily decimal returns
-df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
-
-# 2. Calculate rolling 252-day mean and standard deviation (minimum 126 days/6 months required)
-rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
-rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
-
-# 3. Fetch Live Risk-Free Rate (India 10-Year Bond)
 try:
     print("Fetching live India 10-Year Bond yield for Sharpe calculation...")
-    # Fetch the latest daily data for the bond
     bond_ticker = yf.Ticker("^IN10YT")
     bond_data = bond_ticker.history(period="1d")
     
     if not bond_data.empty:
-        # yfinance returns the yield as a whole number (e.g., 7.05 for 7.05%), so we divide by 100
         live_risk_free_rate = bond_data['Close'].iloc[-1] / 100.0
         print(f"Live Risk-Free Rate acquired: {live_risk_free_rate * 100:.2f}%")
     else:
         raise ValueError("Yahoo Finance returned empty DataFrame.")
-        
 except Exception as e:
-    # Failsafe: If Yahoo Finance is down or throttling your IP, default to a sensible baseline
     print(f"Warning: Could not fetch live bond yield ({e}). Defaulting to 7.0%.")
     live_risk_free_rate = 0.07
 
-# 4. Apply Annualized Sharpe Formula
 daily_rf = live_risk_free_rate / 252
-
 df_combined['Sharpe'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
 df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
 
-# --- NEW: SHIFT CALCULATED METRICS FORWARD BY 1 DAY ---
-# This ensures that "yesterday's" returns and metrics show up on "today's" row for the dashboard.
+# ==========================================
+# 6. SHIFT METRICS TO TOMORROW'S ROW
+# ==========================================
+# 1. Calculate the next trading day
+last_date = df_combined['Date'].max()
+next_trading_day = last_date + BDay(1)
+
+# 2. Create a blank row for tomorrow for every symbol
+symbols = df_combined['Symbol'].unique()
+tomorrow_df = pd.DataFrame({'Date': next_trading_day, 'Symbol': symbols})
+
+# 3. Combine the blank rows into the main dataset and sort
+df_combined = pd.concat([df_combined, tomorrow_df], ignore_index=True)
+df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
+
+# 4. Shift ONLY the calculation columns down by 1 row
 metrics_to_shift = [
     '1D Return %', '1W Return %', '1M Return %', 
     '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS'
 ]
-
-# Group by Symbol and shift the selected columns down by exactly 1 row
 df_combined[metrics_to_shift] = df_combined.groupby('Symbol')[metrics_to_shift].shift(1)
 
 # ==========================================
-# 6. FINAL CLEANUP & MERGE
+# 7. FINAL CLEANUP & MERGE
 # ==========================================
-# Prevent Industry_x/Industry_y conflicts by dropping the old column before merging
 if 'Industry' in df_combined.columns:
     df_combined = df_combined.drop(columns=['Industry'])
 
-# Merge with the Nifty 500 list to bring in the fresh Industry column
 df_final = pd.merge(df_combined, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
 
-# Reorder columns perfectly for Power BI, including the new returns and Sharpe
+# Convert dates to cleanly formatted strings for the CSV
+df_final['Date'] = df_final['Date'].dt.strftime('%Y-%m-%d')
+
 final_columns = [
     'Date', 'Symbol', 'Industry', 'Open', 'High', 'Low', 'Close', 'Volume', 
     '1D Return %', '1W Return %', '1M Return %', '3M Return %', '6M Return %', 
@@ -228,6 +226,5 @@ final_columns = [
 ]
 df_final = df_final[final_columns]
 
-# Save the master file back to the root directory
 df_final.to_csv(CSV_FILENAME, index=False)
 print(f"Success! Master database '{CSV_FILENAME}' has been updated with Return % columns and Sharpe Ratio.")
