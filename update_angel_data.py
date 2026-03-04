@@ -138,10 +138,11 @@ df_combined['ret_6m'] = df_combined.groupby('Symbol')['Close'].pct_change(period
 df_combined['ret_9m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_9M)
 df_combined['ret_12m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_12M)
 
-df_combined['weighted_avg'] = (0.40 * df_combined['ret_3m']) + \
-                              (0.20 * df_combined['ret_6m']) + \
-                              (0.20 * df_combined['ret_9m']) + \
-                              (0.20 * df_combined['ret_12m'])
+# Use .fillna(0) so missing long-term data on new stocks doesn't break the entire calculation
+df_combined['weighted_avg'] = (0.40 * df_combined['ret_3m'].fillna(0)) + \
+                              (0.20 * df_combined['ret_6m'].fillna(0)) + \
+                              (0.20 * df_combined['ret_9m'].fillna(0)) + \
+                              (0.20 * df_combined['ret_12m'].fillna(0))
 
 def calculate_daily_rank(x):
     valid_counts = x.notna().sum()
