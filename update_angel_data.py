@@ -164,6 +164,7 @@ df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_cha
 rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
 rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
 
+df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
 try:
     print("Fetching live India 10-Year Bond yield for Sharpe calculation...")
     bond_ticker = yf.Ticker("^IN10YT")
@@ -175,9 +176,24 @@ try:
 except Exception:
     live_risk_free_rate = 0.07
 
+# [KEEP YOUR TRY/EXCEPT BLOCK HERE THAT FETCHES THE LIVE BOND YIELD]
 daily_rf = live_risk_free_rate / 252
-df_combined['Sharpe'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
-df_combined['Sharpe'] = df_combined['Sharpe'].round(2)
+
+# --- NEW: CALCULATE WEIGHTED SHARPE ---
+windows = {'3M': 63, '6M': 126, '9M': 189, '12M': 252}
+for suffix, window in windows.items():
+    rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window).mean())
+    rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window).std())
+    rolling_std = rolling_std.replace(0, np.nan) # Prevent divide-by-zero errors
+    df_combined[f'Sharpe_{suffix}'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
+
+# Apply your custom formula (using fillna(0) so recent IPOs don't break the math)
+df_combined['Weighted Sharpe'] = (
+    0.40 * df_combined['Sharpe_3M'].fillna(0) + 
+    0.20 * df_combined['Sharpe_6M'].fillna(0) + 
+    0.20 * df_combined['Sharpe_9M'].fillna(0) + 
+    0.20 * df_combined['Sharpe_12M'].fillna(0)
+).round(2)
 
 # Save the historical database so tomorrow's script has data to work with
 df_combined.to_csv(HISTORY_FILENAME, index=False)
