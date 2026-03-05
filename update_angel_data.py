@@ -78,7 +78,9 @@ nifty500_symbols = df_nifty500['Symbol'].tolist()
 
 new_data_rows = []
 
-for symbol in nifty500_symbols:
+print(f"Fetching data for {len(nifty500_symbols)} stocks...")
+
+for i, symbol in enumerate(nifty500_symbols):
     symbol = str(symbol).strip()
     if symbol not in token_map: continue
 
@@ -87,23 +89,48 @@ for symbol in nifty500_symbols:
         "interval": INTERVAL, "fromdate": FROM_DATE, "todate": TO_DATE
     }
 
-    try:
-        hist_data = smartApi.getCandleData(historicParam)
-        if hist_data['status'] and hist_data['data']:
-            for row in hist_data['data']:
-                date_str = row[0][:10]
-                new_data_rows.append({
-                    'Date': date_str,
-                    'Symbol': symbol,
-                    'Open': row[1],
-                    'High': row[2],
-                    'Low': row[3],
-                    'Close': row[4],
-                    'Volume': row[5]
-                })
-    except Exception as e:
-        pass
-    time.sleep(0.4) 
+    # --- NEW: RETRY LOGIC FOR ERRORS AND NULL VALUES ---
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            hist_data = smartApi.getCandleData(historicParam)
+            
+            # 1. IF SUCCESS: Check if we got a valid status AND actual data inside
+            if hist_data and hist_data.get('status') and hist_data.get('data'):
+                for row in hist_data['data']:
+                    date_str = row[0][:10]
+                    new_data_rows.append({
+                        'Date': date_str,
+                        'Symbol': symbol,
+                        'Open': row[1],
+                        'High': row[2],
+                        'Low': row[3],
+                        'Close': row[4],
+                        'Volume': row[5]
+                    })
+                break # Success! Break out of the retry loop and move to the next stock
+            
+            # 2. IF RATE LIMITED: Angel One's specific error code for Too Many Requests
+            elif hist_data and hist_data.get('errorcode') == 'AB1004':
+                print(f"Rate limited on {symbol}. Cooling down for 3s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(3)
+                
+            # 3. IF NULL/EMPTY: The API responded, but the data array was empty or null
+            else:
+                print(f"Null or empty data for {symbol}. Retrying in 2s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(2)
+                
+        except Exception as e:
+            # 4. IF NETWORK ERROR: Disconnects, timeouts, etc.
+            print(f"Network error on {symbol}: {e}. Retrying in 2s... (Attempt {attempt+1}/{max_retries})")
+            time.sleep(2)
+            
+    # Base rate limit delay to prevent hitting the wall in the first place
+    time.sleep(0.6) 
+
+    # Print progress to the console so you know it hasn't frozen
+    if (i + 1) % 50 == 0:
+        print(f"Processed {i + 1} / {len(nifty500_symbols)} stocks...")
 
 # ==========================================
 # 5. COMBINE & CALCULATE ALL METRICS
