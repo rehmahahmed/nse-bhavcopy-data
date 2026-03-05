@@ -219,7 +219,7 @@ df_final['Last_Updated'] = update_time_str
 # Keep ONLY the columns you requested, plus the new timestamp
 final_columns = [
     'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
-    '3M Return %', '6M Return %', 'Sharpe', 'weighted_avg', 'RS', 'Last_Updated'
+    '3M Return %', '6M Return %', 'Weighted Sharpe', 'weighted_avg', 'RS', 'Last_Updated'
 ]
 df_final = df_final[final_columns]
 
