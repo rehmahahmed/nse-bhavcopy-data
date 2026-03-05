@@ -216,10 +216,14 @@ df_final = pd.merge(df_latest, df_nifty500[['Symbol', 'Industry']], on='Symbol',
 update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 df_final['Last_Updated'] = update_time_str
 
-# Keep ONLY the columns you requested, plus the new timestamp
+# --- NEW: ADD ROLLING 6-MONTH CHART LINK ---
+# We use Google Finance because it accepts the '?window=6M' parameter to force the timeframe
+df_final['Chart_Link'] = "https://www.google.com/finance/quote/" + df_final['Symbol'] + ":NSE?window=6M"
+
+# Keep ONLY the columns you requested, plus the new link
 final_columns = [
     'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
-    '3M Return %', '6M Return %', 'Weighted Sharpe', 'weighted_avg', 'RS', 'Last_Updated'
+    '3M Return %', '6M Return %', 'Weighted Sharpe', 'weighted_avg', 'RS', 'Last_Updated', 'Chart_Link'
 ]
 df_final = df_final[final_columns]
 
