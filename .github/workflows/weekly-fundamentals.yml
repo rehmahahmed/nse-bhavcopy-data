@@ -1,13 +1,22 @@
-name: Weekly Fundamentals Update
+name: Bi-Weekly Fundamentals Update
 
 on:
   schedule:
-    # Runs at 02:00 UTC every Sunday (once every 7 days)
-    - cron: '0 2 * * 0'
-  workflow_dispatch: # Allows you to run it manually from the Actions tab
+    # Runs at 02:00 UTC every Wednesday (Day 3) and Saturday (Day 6)
+    - cron: '0 2 * * 3,6'
+  workflow_dispatch: 
+    inputs:
+      chunk:
+        description: 'Manual Trigger: Which chunk to run? (0 for first 250, 1 for next 250)'
+        required: true
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '1'
 
 permissions:
-  contents: write # Crucial: Allows the bot to save the CSV back to your repo
+  contents: write 
 
 jobs:
   update-fundamentals:
@@ -25,9 +34,27 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas yfinance numpy
+          pip install pandas numpy requests
+
+      - name: Determine Target Chunk
+        id: set_chunk
+        run: |
+          # If triggered manually, use the dropdown input
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "CHUNK_INDEX=${{ github.event.inputs.chunk }}" >> $GITHUB_ENV
+          else
+            # If scheduled, check the day. Wednesday=3, Saturday=6
+            DAY=$(date +%u) 
+            if [ "$DAY" -eq 3 ]; then
+              echo "CHUNK_INDEX=0" >> $GITHUB_ENV
+            else
+              echo "CHUNK_INDEX=1" >> $GITHUB_ENV
+            fi
+          fi
 
       - name: Run Fundamental Data Script
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }} # MUST add this to your Repo Secrets!
         run: python update_fundamentals.py
 
       - name: Commit and Push changes
@@ -36,18 +63,11 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           if [ -f nifty500_fundamentals.csv ]; then
-            # 1. ADD the new file
             git add nifty500_fundamentals.csv
             
-            # 2. CHECK for changes and COMMIT
             if ! git diff --staged --quiet; then
-              git commit -m "Automated weekly update: nifty500_fundamentals.csv"
-              
-              # 3. PULL background changes smoothly using rebase
-              # '-X theirs' prioritizes your newly generated local file if there's a conflict
+              git commit -m "Automated update: Fundamentals Chunk $CHUNK_INDEX"
               git pull origin main --rebase -X theirs
-              
-              # 4. PUSH to your repo
               git push origin main
             else
               echo "No changes in nifty500_fundamentals.csv to commit."
