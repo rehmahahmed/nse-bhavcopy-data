@@ -1,10 +1,10 @@
 import pandas as pd
-import yfinance as yf
 import numpy as np
 import time
 import os
 import warnings
 import datetime
+import requests
 
 warnings.filterwarnings('ignore')
 
@@ -13,6 +13,11 @@ warnings.filterwarnings('ignore')
 # ==========================================
 INPUT_FILE = "ind_nifty500list.csv"
 OUTPUT_FILE = "nifty500_fundamentals.csv"
+FMP_API_KEY = os.environ.get("FMP_API_KEY")
+
+if not FMP_API_KEY:
+    print("Error: FMP_API_KEY environment variable not found. Exiting.")
+    exit(1)
 
 print(f"Loading Nifty 500 universe from {INPUT_FILE}...")
 try:
@@ -23,110 +28,118 @@ try:
         symbols = df_nifty500.iloc[:, 0].tolist()
 except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
-    exit()
+    exit(1)
 
-print(f"Fetching fundamental data for {len(symbols)} stocks.")
-print("Using dynamic column fallbacks for maximum data coverage. This will take roughly 5-10 minutes...")
+# --- CHUNK LOGIC FOR FREE TIER ---
+# Get the chunk index from GitHub Actions (0 for the first half, 1 for the second)
+CHUNK_INDEX = int(os.environ.get("CHUNK_INDEX", 0))
+CHUNK_SIZE = 250
+start_idx = CHUNK_INDEX * CHUNK_SIZE
+end_idx = start_idx + CHUNK_SIZE
+
+# Slice the list so we only process 250 stocks today
+target_symbols = symbols[start_idx:end_idx]
+
+print(f"Processing Chunk {CHUNK_INDEX}: Fetching {len(target_symbols)} stocks (Index {start_idx} to {end_idx}).")
 
 fundamental_data = []
 
-# Helper function to find the first matching column alias
-def get_best_column(df, aliases):
-    for alias in aliases:
-        if alias in df.columns:
-            return alias
-    return None
-
 # ==========================================
-# 2. FETCH FUNDAMENTAL DATA
+# 2. FETCH FUNDAMENTAL DATA (FMP)
 # ==========================================
-for i, symbol in enumerate(symbols):
+for i, symbol in enumerate(target_symbols):
     symbol = str(symbol).strip()
-    yf_symbol = f"{symbol}.NS"
+    fmp_symbol = f"{symbol}.NS"
     
-    # Set default values
     qoq_profit, qtr_profit_var, qoq_sales, opm = np.nan, np.nan, np.nan, np.nan
     
     try:
-        ticker = yf.Ticker(yf_symbol)
-        q_income = ticker.quarterly_income_stmt
+        url = f"https://financialmodelingprep.com/api/v3/income-statement/{fmp_symbol}?period=quarter&limit=5&apikey={FMP_API_KEY}"
+        response = requests.get(url)
         
-        if not q_income.empty:
-            q_income = q_income.T  # Transpose so Dates become rows
+        if response.status_code == 200:
+            data = response.json()
             
-            # Define aliases to catch different reporting standards (Banks vs Manufacturing)
-            rev_aliases = ['Total Revenue', 'Operating Revenue', 'Total Operating Income']
-            op_inc_aliases = ['Operating Income', 'EBIT', 'Net Income Before Taxes']
-            net_inc_aliases = ['Net Income', 'Net Income Applicable To Common Shares', 'Net Income From Continuing And Discontinued Operation']
-            
-            # Find the actual column names present for this specific stock
-            rev_col = get_best_column(q_income, rev_aliases)
-            op_col = get_best_column(q_income, op_inc_aliases)
-            net_col = get_best_column(q_income, net_inc_aliases)
-            
-            # --- 1. Calculate OPM (Operating Margin) for the latest quarter ---
-            if op_col and rev_col:
-                op_inc = q_income[op_col].iloc[0]
-                tot_rev = q_income[rev_col].iloc[0]
-                if pd.notna(op_inc) and pd.notna(tot_rev) and tot_rev != 0:
+            if len(data) > 0:
+                latest = data[0]
+                op_inc = latest.get('operatingIncome', 0)
+                tot_rev = latest.get('revenue', 0)
+                if tot_rev and tot_rev != 0:
                     opm = (op_inc / tot_rev) * 100
                     
-            # --- 2. Calculate QoQ Sales & Profits (Latest vs Immediately Previous Quarter) ---
-            if len(q_income) >= 2:
-                if rev_col:
-                    curr_rev = q_income[rev_col].iloc[0]
-                    prev_rev = q_income[rev_col].iloc[1]
-                    if pd.notna(curr_rev) and pd.notna(prev_rev) and prev_rev != 0:
-                        qoq_sales = ((curr_rev / prev_rev) - 1) * 100
-                        
-                if net_col:
-                    curr_ni = q_income[net_col].iloc[0]
-                    prev_ni = q_income[net_col].iloc[1]
-                    if pd.notna(curr_ni) and pd.notna(prev_ni) and prev_ni != 0:
-                        qoq_profit = ((curr_ni - prev_ni) / abs(prev_ni)) * 100 
-                        
-            # --- 3. Calculate Qtrly Profit Variance (Latest vs Same Quarter Last Year) ---
-            if len(q_income) >= 5 and net_col:
-                curr_ni = q_income[net_col].iloc[0]
-                yoy_ni = q_income[net_col].iloc[4] # 4 quarters ago
-                if pd.notna(curr_ni) and pd.notna(yoy_ni) and yoy_ni != 0:
+            if len(data) >= 2:
+                latest = data[0]
+                prev = data[1]
+                curr_rev = latest.get('revenue', 0)
+                prev_rev = prev.get('revenue', 0)
+                if prev_rev and prev_rev != 0:
+                    qoq_sales = ((curr_rev / prev_rev) - 1) * 100
+                    
+                curr_ni = latest.get('netIncome', 0)
+                prev_ni = prev.get('netIncome', 0)
+                if prev_ni and prev_ni != 0:
+                    qoq_profit = ((curr_ni - prev_ni) / abs(prev_ni)) * 100
+                    
+            if len(data) >= 5:
+                latest = data[0]
+                yoy = data[4] 
+                curr_ni = latest.get('netIncome', 0)
+                yoy_ni = yoy.get('netIncome', 0)
+                if yoy_ni and yoy_ni != 0:
                     qtr_profit_var = ((curr_ni - yoy_ni) / abs(yoy_ni)) * 100
 
     except Exception as e:
-        # Pass on catastrophic ticker failures so the loop doesn't break
-        pass 
+        print(f"Error fetching {symbol}: {e}")
+        pass
 
+    update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     fundamental_data.append({
         'Symbol': symbol,
         'Qtr Profit Var %': round(qtr_profit_var, 2) if pd.notna(qtr_profit_var) else np.nan,
         'QoQ profits %': round(qoq_profit, 2) if pd.notna(qoq_profit) else np.nan,
         'QoQ sales %': round(qoq_sales, 2) if pd.notna(qoq_sales) else np.nan,
-        'OPM': round(opm, 2) if pd.notna(opm) else np.nan
+        'OPM': round(opm, 2) if pd.notna(opm) else np.nan,
+        'Last_Updated': update_time_str
     })
-
-    # Print progress to the console
+    
     if (i + 1) % 50 == 0:
-        print(f"Processed {i + 1} / {len(symbols)} stocks...")
+        print(f"Processed {i + 1} / {len(target_symbols)} stocks...")
         
-    time.sleep(0.1)
+    time.sleep(0.1) 
 
 # ==========================================
-# 3. FORMAT & SAVE TO CSV
+# 3. MERGE & SAVE TO CSV
 # ==========================================
-df_fund = pd.DataFrame(fundamental_data)
+df_new = pd.DataFrame(fundamental_data)
+df_new = pd.merge(df_nifty500[['Symbol', 'Industry']], df_new, on='Symbol', how='inner')
 
-# Merge with Industry column from the input file
-df_fund = pd.merge(df_nifty500[['Symbol', 'Industry']], df_fund, on='Symbol', how='right')
-
-# Add Last Updated Timestamp
-update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-df_fund['Last_Updated'] = update_time_str
+# Load existing CSV if it exists so we don't delete the other half of the stocks
+if os.path.exists(OUTPUT_FILE):
+    print(f"Found existing {OUTPUT_FILE}. Merging new chunk data...")
+    df_old = pd.read_csv(OUTPUT_FILE)
+    
+    # Set index to Symbol to update seamlessly
+    df_old.set_index('Symbol', inplace=True)
+    df_new.set_index('Symbol', inplace=True)
+    
+    # Overwrite the old stock rows with the newly fetched rows
+    df_old.update(df_new)
+    
+    # Catch any brand new symbols that weren't in the old file at all
+    new_symbols = df_new[~df_new.index.isin(df_old.index)]
+    df_final = pd.concat([df_old, new_symbols]).reset_index()
+else:
+    print(f"No existing {OUTPUT_FILE} found. Creating new...")
+    df_final = df_new
 
 # Clean up column order
 final_cols = ['Symbol', 'Industry', 'Qtr Profit Var %', 'QoQ profits %', 'QoQ sales %', 'OPM', 'Last_Updated']
-df_fund = df_fund[final_cols]
 
-# Save to root directory
-df_fund.to_csv(OUTPUT_FILE, index=False)
+# Ensure all columns exist to prevent KeyError on fresh runs
+for col in final_cols:
+    if col not in df_final.columns:
+        df_final[col] = np.nan
+
+df_final = df_final[final_cols]
+df_final.to_csv(OUTPUT_FILE, index=False)
 print(f"\n[SUCCESS] Fundamental data saved to {OUTPUT_FILE}")
-print(f"Last Updated: {update_time_str}")
