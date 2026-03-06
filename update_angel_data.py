@@ -17,21 +17,12 @@ CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
 PIN = os.environ.get("ANGEL_PIN")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
 
-# File paths
-INPUT_LIST_FILENAME = "nifty750list.csv"
+# The background database needed to calculate rolling metrics (Sharpe, 6M returns, etc.)
 HISTORY_FILENAME = "historical_db.csv" 
+# The final 500-row dashboard output file you requested
 CSV_FILENAME = "daily_rs_data.csv" 
 
 INTERVAL = "ONE_DAY"
-
-# --- NEW: Ensure destination directories exist if you ever use subfolders ---
-def ensure_dir_exists(filepath):
-    directory = os.path.dirname(filepath)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory)
-
-ensure_dir_exists(HISTORY_FILENAME)
-ensure_dir_exists(CSV_FILENAME)
 
 # ==========================================
 # 2. SMART DATE CALCULATION (SELF-HEALING)
@@ -39,6 +30,7 @@ ensure_dir_exists(CSV_FILENAME)
 end_date = datetime.datetime.now()
 TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
 
+# We now load from the HISTORY file, not the 500-row dashboard file
 if os.path.exists(HISTORY_FILENAME) and os.path.getsize(HISTORY_FILENAME) > 0:
     print(f"Loading existing historical database: {HISTORY_FILENAME}")
     df_existing = pd.read_csv(HISTORY_FILENAME)
@@ -50,7 +42,7 @@ if os.path.exists(HISTORY_FILENAME) and os.path.getsize(HISTORY_FILENAME) > 0:
     start_date = end_date - datetime.timedelta(days=10)
     print(f"Fetching 10-day overlap from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
 else:
-    print(f"No existing historical database found at '{HISTORY_FILENAME}'. Fetching full 5-year history...")
+    print("No existing historical database found. Fetching full 5-year history...")
     df_existing = pd.DataFrame()
     start_date = end_date - datetime.timedelta(days=5*365)
 
@@ -81,20 +73,14 @@ token_map = {inst['symbol'].replace('-EQ', ''): inst['token']
 # ==========================================
 # 4. LOAD SYMBOLS & FETCH MISSING DATA
 # ==========================================
-# --- NEW: Crash prevention if the input list is missing ---
-if not os.path.exists(INPUT_LIST_FILENAME):
-    print(f"CRITICAL ERROR: Could not find '{INPUT_LIST_FILENAME}'.")
-    print("Please make sure you have downloaded the Nifty 750 CSV from NSE and placed it in the same folder as this script.")
-    exit()
-
-df_nifty750 = pd.read_csv(INPUT_LIST_FILENAME)
-nifty750_symbols = df_nifty750['Symbol'].tolist()
+df_nifty500 = pd.read_csv('nifty750list.csv')
+nifty500_symbols = df_nifty500['Symbol'].tolist()
 
 new_data_rows = []
 
-print(f"Fetching data for {len(nifty750_symbols)} stocks...")
+print(f"Fetching data for {len(nifty500_symbols)} stocks...")
 
-for i, symbol in enumerate(nifty750_symbols):
+for i, symbol in enumerate(nifty500_symbols):
     symbol = str(symbol).strip()
     if symbol not in token_map: continue
 
@@ -103,11 +89,13 @@ for i, symbol in enumerate(nifty750_symbols):
         "interval": INTERVAL, "fromdate": FROM_DATE, "todate": TO_DATE
     }
 
+    # --- NEW: RETRY LOGIC FOR ERRORS AND NULL VALUES ---
     max_retries = 3
     for attempt in range(max_retries):
         try:
             hist_data = smartApi.getCandleData(historicParam)
             
+            # 1. IF SUCCESS: Check if we got a valid status AND actual data inside
             if hist_data and hist_data.get('status') and hist_data.get('data'):
                 for row in hist_data['data']:
                     date_str = row[0][:10]
@@ -120,24 +108,29 @@ for i, symbol in enumerate(nifty750_symbols):
                         'Close': row[4],
                         'Volume': row[5]
                     })
-                break 
+                break # Success! Break out of the retry loop and move to the next stock
             
+            # 2. IF RATE LIMITED: Angel One's specific error code for Too Many Requests
             elif hist_data and hist_data.get('errorcode') == 'AB1004':
                 print(f"Rate limited on {symbol}. Cooling down for 3s... (Attempt {attempt+1}/{max_retries})")
                 time.sleep(3)
                 
+            # 3. IF NULL/EMPTY: The API responded, but the data array was empty or null
             else:
                 print(f"Null or empty data for {symbol}. Retrying in 2s... (Attempt {attempt+1}/{max_retries})")
                 time.sleep(2)
                 
         except Exception as e:
+            # 4. IF NETWORK ERROR: Disconnects, timeouts, etc.
             print(f"Network error on {symbol}: {e}. Retrying in 2s... (Attempt {attempt+1}/{max_retries})")
             time.sleep(2)
             
+    # Base rate limit delay to prevent hitting the wall in the first place
     time.sleep(0.6) 
 
+    # Print progress to the console so you know it hasn't frozen
     if (i + 1) % 50 == 0:
-        print(f"Processed {i + 1} / {len(nifty750_symbols)} stocks...")
+        print(f"Processed {i + 1} / {len(nifty500_symbols)} stocks...")
 
 # ==========================================
 # 5. COMBINE & CALCULATE ALL METRICS
@@ -164,7 +157,7 @@ print("Calculating RS, Return percentages, and Sharpe...")
 df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
 
 # Define trading day periods
-DAYS_1W, DAYS_1M = 5, 21
+DAYS_1D, DAYS_1W, DAYS_1M = 1, 5, 21
 DAYS_3M, DAYS_6M, DAYS_9M, DAYS_12M = 63, 126, 189, 252
 
 df_combined['ret_3m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_3M)
@@ -172,6 +165,7 @@ df_combined['ret_6m'] = df_combined.groupby('Symbol')['Close'].pct_change(period
 df_combined['ret_9m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_9M)
 df_combined['ret_12m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_12M)
 
+# Use .fillna(0) so missing long-term data on new stocks doesn't break the entire calculation
 df_combined['weighted_avg'] = (0.40 * df_combined['ret_3m'].fillna(0)) + \
                               (0.20 * df_combined['ret_6m'].fillna(0)) + \
                               (0.20 * df_combined['ret_9m'].fillna(0)) + \
@@ -187,13 +181,17 @@ df_combined['RS'] = df_combined.groupby('Date')['weighted_avg'].transform(calcul
 df_combined['RS'] = np.where(df_combined['RS'] == 0, 1, df_combined['RS'])
 df_combined['RS'] = np.where(df_combined['RS'] == 100, 99, df_combined['RS'])
 
+df_combined['1D Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1D) * 100).round(2)
 df_combined['1W Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1W) * 100).round(2)
 df_combined['1M Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1M) * 100).round(2)
 df_combined['3M Return %'] = (df_combined['ret_3m'] * 100).round(2)
 df_combined['6M Return %'] = (df_combined['ret_6m'] * 100).round(2)
 
 df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
+rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).mean())
+rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window=252, min_periods=126).std())
 
+df_combined['daily_return_dec'] = df_combined.groupby('Symbol')['Close'].pct_change(1)
 try:
     print("Fetching live India 10-Year Bond yield for Sharpe calculation...")
     bond_ticker = yf.Ticker("^IN10YT")
@@ -205,15 +203,18 @@ try:
 except Exception:
     live_risk_free_rate = 0.07
 
+# [KEEP YOUR TRY/EXCEPT BLOCK HERE THAT FETCHES THE LIVE BOND YIELD]
 daily_rf = live_risk_free_rate / 252
 
+# --- NEW: CALCULATE WEIGHTED SHARPE ---
 windows = {'3M': 63, '6M': 126, '9M': 189, '12M': 252}
 for suffix, window in windows.items():
     rolling_mean = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window).mean())
     rolling_std = df_combined.groupby('Symbol')['daily_return_dec'].transform(lambda x: x.rolling(window).std())
-    rolling_std = rolling_std.replace(0, np.nan) 
+    rolling_std = rolling_std.replace(0, np.nan) # Prevent divide-by-zero errors
     df_combined[f'Sharpe_{suffix}'] = ((rolling_mean - daily_rf) / rolling_std) * np.sqrt(252)
 
+# Apply your custom formula (using fillna(0) so recent IPOs don't break the math)
 df_combined['Weighted Sharpe'] = (
     0.40 * df_combined['Sharpe_3M'].fillna(0) + 
     0.20 * df_combined['Sharpe_6M'].fillna(0) + 
@@ -221,31 +222,38 @@ df_combined['Weighted Sharpe'] = (
     0.20 * df_combined['Sharpe_12M'].fillna(0)
 ).round(2)
 
-# Save history file - pandas will automatically create the file if it doesn't exist
+# Save the historical database so tomorrow's script has data to work with
 df_combined.to_csv(HISTORY_FILENAME, index=False)
 
 # ==========================================
-# 6. EXTRACT DASHBOARD DATA
+# 6. EXTRACT 500 ROWS FOR DASHBOARD 
 # ==========================================
-print("Extracting the latest rows for the dashboard...")
+print("Extracting the latest 500 rows for the dashboard...")
 
+# Get ONLY the very last row for each symbol (Yesterday's Close)
 df_latest = df_combined.groupby('Symbol').tail(1).copy()
 
+# Add the Industry column
 if 'Industry' in df_latest.columns:
     df_latest = df_latest.drop(columns=['Industry'])
-df_final = pd.merge(df_latest, df_nifty750[['Symbol', 'Industry']], on='Symbol', how='left')
+df_final = pd.merge(df_latest, df_nifty500[['Symbol', 'Industry']], on='Symbol', how='left')
 
+# --- NEW: ADD LAST UPDATED TIMESTAMP ---
+# Grab the current system time and format it cleanly
 update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 df_final['Last_Updated'] = update_time_str
+
+# --- NEW: ADD ROLLING 6-MONTH CHART LINK ---
+# We use Google Finance because it accepts the '?window=6M' parameter to force the timeframe
 df_final['Chart_Link'] = "https://www.google.com/finance/quote/" + df_final['Symbol'] + ":NSE?window=6M"
 
-# --- CHANGE: 'Close' column added to the dashboard output ---
+# Keep ONLY the columns you requested, plus the new link
 final_columns = [
-    'Symbol', 'Industry', 'Close', '1W Return %', '1M Return %', 
+    'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
     '3M Return %', '6M Return %', 'Weighted Sharpe', 'weighted_avg', 'RS', 'Last_Updated', 'Chart_Link'
 ]
 df_final = df_final[final_columns]
 
-# Save final dashboard file - pandas will automatically create the file if it doesn't exist
+# Overwrite the daily_rs_data.csv with exactly 500 rows
 df_final.to_csv(CSV_FILENAME, index=False)
 print(f"Success! Dashboard file '{CSV_FILENAME}' generated. Last Updated: {update_time_str}")
