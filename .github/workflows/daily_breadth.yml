@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Fetches all history so the rebase command has the context it needs
+          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,13 +36,25 @@ jobs:
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
-        # Update this filename if you fix the typo in your repo!
         run: python market_breadth.py
 
       - name: Commit and Push Updated CSV
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add market_breadth_history_5yr.csv
-          git commit -m "Automated daily breadth update" || echo "No changes to commit"
-          git push
+          
+          # 1. Tell git to use rebase to handle version mismatches cleanly
+          git config pull.rebase true
+          
+          # 2. Pull the absolute latest changes from the repo before doing anything
+          # (Checks both 'main' and 'master' depending on how your repo is set up)
+          git pull origin main || git pull origin master
+          
+          # 3. Safety check: Only add and commit if the CSV actually generated
+          if [ -f market_breadth_history_5yr.csv ]; then
+            git add market_breadth_history_5yr.csv
+            git commit -m "Automated daily breadth update" || echo "No changes to commit"
+            git push
+          else
+            echo "CSV file was not found! The Python script likely failed. Skipping commit."
+          fi
