@@ -11,33 +11,33 @@ warnings.filterwarnings('ignore')
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
-INPUT_FILE = "ind_nifty500list.csv"
-OUTPUT_FILE = "nifty500_fundamentals.csv"
+INPUT_FILE = "nifty750list.csv"
+OUTPUT_FILE = "nifty750_fundamentals.csv"
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 
 if not FMP_API_KEY:
     print("Error: FMP_API_KEY environment variable not found. Exiting.")
     exit(1)
 
-print(f"Loading Nifty 500 universe from {INPUT_FILE}...")
+print(f"Loading Nifty 750 universe from {INPUT_FILE}...")
 try:
-    df_nifty500 = pd.read_csv(INPUT_FILE)
-    if 'Symbol' in df_nifty500.columns:
-        symbols = df_nifty500['Symbol'].tolist()
+    df_nifty750 = pd.read_csv(INPUT_FILE)
+    if 'Symbol' in df_nifty750.columns:
+        symbols = df_nifty750['Symbol'].tolist()
     else:
-        symbols = df_nifty500.iloc[:, 0].tolist()
+        symbols = df_nifty750.iloc[:, 0].tolist()
 except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
     exit(1)
 
-# --- CHUNK LOGIC FOR FREE TIER ---
-# Get the chunk index from GitHub Actions (0 for the first half, 1 for the second)
+# --- CHUNK LOGIC FOR FREE TIER (3-Day Cycle for 750 stocks) ---
+# CHUNK_INDEX should be 0, 1, or 2 (Set this in GitHub Actions)
 CHUNK_INDEX = int(os.environ.get("CHUNK_INDEX", 0))
 CHUNK_SIZE = 250
 start_idx = CHUNK_INDEX * CHUNK_SIZE
 end_idx = start_idx + CHUNK_SIZE
 
-# Slice the list so we only process 250 stocks today
+# Slice the list to process 250 stocks at a time
 target_symbols = symbols[start_idx:end_idx]
 
 print(f"Processing Chunk {CHUNK_INDEX}: Fetching {len(target_symbols)} stocks (Index {start_idx} to {end_idx}).")
@@ -111,35 +111,34 @@ for i, symbol in enumerate(target_symbols):
 # 3. MERGE & SAVE TO CSV
 # ==========================================
 df_new = pd.DataFrame(fundamental_data)
-df_new = pd.merge(df_nifty500[['Symbol', 'Industry']], df_new, on='Symbol', how='inner')
+# Merge with original Industry labels
+df_new = pd.merge(df_nifty750[['Symbol', 'Industry']], df_new, on='Symbol', how='inner')
 
-# Load existing CSV if it exists so we don't delete the other half of the stocks
 if os.path.exists(OUTPUT_FILE):
     print(f"Found existing {OUTPUT_FILE}. Merging new chunk data...")
     df_old = pd.read_csv(OUTPUT_FILE)
     
-    # Set index to Symbol to update seamlessly
+    # Use Symbol as index for the update
     df_old.set_index('Symbol', inplace=True)
     df_new.set_index('Symbol', inplace=True)
     
-    # Overwrite the old stock rows with the newly fetched rows
+    # Update existing rows with fresh data
     df_old.update(df_new)
     
-    # Catch any brand new symbols that weren't in the old file at all
+    # Combine with any brand new symbols
     new_symbols = df_new[~df_new.index.isin(df_old.index)]
     df_final = pd.concat([df_old, new_symbols]).reset_index()
 else:
     print(f"No existing {OUTPUT_FILE} found. Creating new...")
     df_final = df_new
 
-# Clean up column order
+# Maintain consistent column order
 final_cols = ['Symbol', 'Industry', 'Qtr Profit Var %', 'QoQ profits %', 'QoQ sales %', 'OPM', 'Last_Updated']
 
-# Ensure all columns exist to prevent KeyError on fresh runs
 for col in final_cols:
     if col not in df_final.columns:
         df_final[col] = np.nan
 
 df_final = df_final[final_cols]
 df_final.to_csv(OUTPUT_FILE, index=False)
-print(f"\n[SUCCESS] Fundamental data saved to {OUTPUT_FILE}")
+print(f"\n[SUCCESS] Nifty 750 Fundamental data saved to {OUTPUT_FILE}")
