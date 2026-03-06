@@ -34,7 +34,7 @@ jobs:
           ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
         # Update this filename if you fix the typo in your repo!
-        run: python market_breadtj.py
+        run: python market_breadth.py
 
       - name: Commit and Push Updated CSV
         run: |
