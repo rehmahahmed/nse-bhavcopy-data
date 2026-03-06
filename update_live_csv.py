@@ -36,7 +36,7 @@ token_map = {inst['symbol'].replace('-EQ', ''): inst['token']
 # ==========================================
 # 3. LOAD SYMBOLS & FETCH LTP
 # ==========================================
-df_nifty500 = pd.read_csv('ind_nifty500list.csv')
+df_nifty500 = pd.read_csv('nifty750list.csv')
 nifty500_symbols = df_nifty500['Symbol'].tolist()
 
 live_data = []
