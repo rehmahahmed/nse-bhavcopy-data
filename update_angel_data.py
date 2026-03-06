@@ -229,12 +229,13 @@ df_latest = df_combined.groupby('Symbol').tail(1).copy()
 if 'Industry' in df_latest.columns:
     df_latest = df_latest.drop(columns=['Industry'])
     
-# Updated merge variable
 df_final = pd.merge(df_latest, df_nifty750[['Symbol', 'Industry']], on='Symbol', how='left')
 
 update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 df_final['Last_Updated'] = update_time_str
-df_final['Chart_Link'] = "https://www.google.com/finance/quote/" + df_final['Symbol'] + ":NSE?window=6M"
+
+# --- CHANGED: Swapped Google Finance for TradingView ---
+df_final['Chart_Link'] = "https://in.tradingview.com/chart/?symbol=NSE:" + df_final['Symbol']
 
 final_columns = [
     'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
