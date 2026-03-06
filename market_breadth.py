@@ -4,7 +4,6 @@ import time
 import urllib.request
 import json
 import pyotp
-import numpy as np
 import os
 from SmartApi import SmartConnect
 import warnings
@@ -20,12 +19,16 @@ PIN = os.environ.get("ANGEL_PIN")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
 
 INPUT_FILE = "nifty750list.csv"
-OUTPUT_FILE = "market_breadth_history.csv"
+OUTPUT_FILE = "market_breadth_history_5yr.csv"
 INTERVAL = "ONE_DAY"
 
-# We need 200 trading days for the 200 DMA, so we pull 1 full calendar year
+# --- 5-Year Time Calculation with DMA Padding ---
 end_date = datetime.datetime.now()
-start_date = end_date - datetime.timedelta(days=365)
+five_years_ago = end_date - datetime.timedelta(days=5 * 365)
+
+# We need 200 trading days (~300 calendar days) BEFORE our 5-year start date 
+# so the 200 SMA can calculate properly on day one.
+start_date = five_years_ago - datetime.timedelta(days=300)
 
 TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
 FROM_DATE = start_date.strftime("%Y-%m-%d 09:15")
@@ -60,7 +63,8 @@ except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
     exit()
 
-print(f"Fetching 1-year history for {len(symbols)} stocks. This will take ~10-15 minutes...")
+print(f"Fetching ~6 years of history (to pad the 200 SMA) for {len(symbols)} stocks...")
+print("This will take roughly 30 to 45 minutes to avoid API bans. Please wait...")
 raw_data_rows = []
 
 for i, symbol in enumerate(symbols):
@@ -110,7 +114,7 @@ if not raw_data_rows:
     print("No data fetched from Angel API. Exiting.")
     exit()
 
-print("Pivoting data and calculating moving averages...")
+print("\nPivoting data and calculating the 200 SMA...")
 df_all = pd.DataFrame(raw_data_rows)
 
 # Pivot so Dates are rows and Symbols are columns
@@ -118,42 +122,30 @@ df_close = df_all.pivot(index='Date', columns='Symbol', values='Close')
 df_close.index = pd.to_datetime(df_close.index)
 df_close = df_close.sort_index()
 
-# Calculate Technicals for the entire matrix
-daily_returns = df_close.pct_change() * 100
-dma_20 = df_close.rolling(window=20).mean()
-dma_50 = df_close.rolling(window=50).mean()
-dma_200 = df_close.rolling(window=200).mean()
+# Calculate the 200 Simple Moving Average for the entire matrix
+sma_200 = df_close.rolling(window=200).mean()
 
 # ==========================================
-# 5. AGGREGATE COUNTS & SAVE (JAN 2026 ONWARD)
+# 5. AGGREGATE COUNTS & SAVE (EXACTLY 5 YEARS)
 # ==========================================
-print("Aggregating historical breadth metrics...")
+print("Aggregating breadth metric...")
 
 # Create an empty dataframe with our Dates as the index
 df_breadth = pd.DataFrame(index=df_close.index)
 
-# Vectorized counting: evaluates the condition across all 750 columns simultaneously row-by-row
-df_breadth['Up_4.5_pct'] = (daily_returns >= 4.5).sum(axis=1)
-df_breadth['Down_4.5_pct'] = (daily_returns <= -4.5).sum(axis=1)
-df_breadth['Up_20_pct'] = (daily_returns >= 20.0).sum(axis=1)
-df_breadth['Down_20_pct'] = (daily_returns <= -20.0).sum(axis=1)
+# Vectorized counting: Checks how many stocks are > their 200 SMA each day
+df_breadth['Stocks_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
 
-df_breadth['Above_20_DMA'] = (df_close > dma_20).sum(axis=1)
-df_breadth['Below_20_DMA'] = (df_close < dma_20).sum(axis=1)
-df_breadth['Above_50_DMA'] = (df_close > dma_50).sum(axis=1)
-df_breadth['Below_50_DMA'] = (df_close < dma_50).sum(axis=1)
-df_breadth['Above_200_DMA'] = (df_close > dma_200).sum(axis=1)
-df_breadth['Below_200_DMA'] = (df_close < dma_200).sum(axis=1)
-
-# Slice the dataframe to only include dates from January 1, 2026 to today
-df_breadth = df_breadth.loc['2026-01-01':]
+# Slice the dataframe to exactly the 5-year mark
+cutoff_date_str = five_years_ago.strftime('%Y-%m-%d')
+df_breadth = df_breadth.loc[cutoff_date_str:]
 
 # Convert the Date index back into a standard column for the CSV
 df_breadth = df_breadth.reset_index()
 df_breadth['Date'] = df_breadth['Date'].dt.strftime('%Y-%m-%d')
 
-# Save directly (overwriting is safer than appending, and takes the same amount of time)
 df_breadth.to_csv(OUTPUT_FILE, index=False)
 
-print(f"\n[SUCCESS] Generated historical breadth from Jan 2026. Saved to {OUTPUT_FILE}")
+print(f"\n[SUCCESS] Generated exact 5-year breadth history (Starting {cutoff_date_str}).")
+print(f"Saved to {OUTPUT_FILE}")
 print(f"Total trading days recorded: {len(df_breadth)}")
