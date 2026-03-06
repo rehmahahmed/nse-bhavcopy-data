@@ -1,19 +1,20 @@
-name: Bi-Weekly Fundamentals Update
+name: Tri-Weekly Nifty 750 Fundamentals Update
 
 on:
   schedule:
-    # Runs at 02:00 UTC every Wednesday (Day 3) and Saturday (Day 6)
-    - cron: '0 2 * * 3,6'
+    # Runs at 02:00 UTC every Monday (1), Wednesday (3), and Friday (5)
+    - cron: '0 2 * * 1,3,5'
   workflow_dispatch: 
     inputs:
       chunk:
-        description: 'Manual Trigger: Which chunk to run? (0 for first 250, 1 for next 250)'
+        description: 'Manual Trigger: Which chunk to run? (0: 1-250, 1: 251-500, 2: 501-750)'
         required: true
         default: '0'
         type: choice
         options:
           - '0'
           - '1'
+          - '2'
 
 permissions:
   contents: write 
@@ -25,6 +26,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for rebase logic
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,22 +42,24 @@ jobs:
       - name: Determine Target Chunk
         id: set_chunk
         run: |
-          # If triggered manually, use the dropdown input
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "CHUNK_INDEX=${{ github.event.inputs.chunk }}" >> $GITHUB_ENV
           else
-            # If scheduled, check the day. Wednesday=3, Saturday=6
+            # Get day of week (1=Mon, 3=Wed, 5=Fri)
             DAY=$(date +%u) 
-            if [ "$DAY" -eq 3 ]; then
+            if [ "$DAY" -eq 1 ]; then
               echo "CHUNK_INDEX=0" >> $GITHUB_ENV
-            else
+            elif [ "$DAY" -eq 3 ]; then
               echo "CHUNK_INDEX=1" >> $GITHUB_ENV
+            else
+              echo "CHUNK_INDEX=2" >> $GITHUB_ENV
             fi
           fi
 
       - name: Run Fundamental Data Script
         env:
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }} # MUST add this to your Repo Secrets!
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          CHUNK_INDEX: ${{ env.CHUNK_INDEX }} # Pass the index to Python
         run: python update_fundamentals.py
 
       - name: Commit and Push changes
@@ -62,16 +67,20 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          if [ -f nifty500_fundamentals.csv ]; then
-            git add nifty500_fundamentals.csv
+          # Use the Nifty 750 filename
+          FILE="nifty750_fundamentals.csv"
+          
+          if [ -f "$FILE" ]; then
+            git add "$FILE"
             
             if ! git diff --staged --quiet; then
               git commit -m "Automated update: Fundamentals Chunk $CHUNK_INDEX"
+              # Rebase to prevent version mismatch crashes
               git pull origin main --rebase -X theirs
               git push origin main
             else
-              echo "No changes in nifty500_fundamentals.csv to commit."
+              echo "No changes in $FILE to commit."
             fi
           else
-            echo "nifty500_fundamentals.csv was not generated. Skipping commit."
+            echo "$FILE was not generated. Skipping commit."
           fi
