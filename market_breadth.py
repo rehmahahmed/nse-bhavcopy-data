@@ -54,11 +54,15 @@ token_map = {inst['symbol'].replace('-EQ', ''): inst['token']
              for inst in instrument_list if inst['exch_seg'] == 'NSE' and inst['symbol'].endswith('-EQ')}
 
 # ==========================================
-# 3. LOAD SYMBOLS & FETCH DATA
+# 3. LOAD SYMBOLS, INDUSTRY MAPPING & FETCH DATA
 # ==========================================
 try:
     df_tickers = pd.read_csv(INPUT_FILE)
+    df_tickers['Symbol'] = df_tickers['Symbol'].str.strip()
     symbols = df_tickers['Symbol'].tolist()
+    
+    # --- NEW: Create a dictionary mapping each symbol to its Industry ---
+    industry_map = dict(zip(df_tickers['Symbol'], df_tickers['Industry']))
 except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
     exit()
@@ -128,13 +132,30 @@ sma_200 = df_close.rolling(window=200).mean()
 # ==========================================
 # 5. AGGREGATE COUNTS & SAVE (EXACTLY 5 YEARS)
 # ==========================================
-print("Aggregating breadth metric...")
+print("Aggregating breadth metric by Sector...")
 
 # Create an empty dataframe with our Dates as the index
 df_breadth = pd.DataFrame(index=df_close.index)
 
-# Vectorized counting: Checks how many stocks are > their 200 SMA each day
+# Original total count column (kept exactly as requested)
 df_breadth['Stocks_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
+
+# --- NEW: Group successfully fetched symbols by their Industry ---
+fetched_symbols = df_close.columns.tolist()
+industry_groups = {}
+
+for sym in fetched_symbols:
+    ind = industry_map.get(sym, 'Unknown Sector')
+    if pd.isna(ind): ind = 'Unknown Sector' # Handle any blank industry rows
+    
+    if ind not in industry_groups:
+        industry_groups[ind] = []
+    industry_groups[ind].append(sym)
+
+# --- NEW: Calculate breadth for each specific sector ---
+for ind, syms in industry_groups.items():
+    # Only checks the stocks belonging to that specific industry array
+    df_breadth[ind] = (df_close[syms] > sma_200[syms]).sum(axis=1)
 
 # Slice the dataframe to exactly the 5-year mark
 cutoff_date_str = five_years_ago.strftime('%Y-%m-%d')
@@ -146,6 +167,6 @@ df_breadth['Date'] = df_breadth['Date'].dt.strftime('%Y-%m-%d')
 
 df_breadth.to_csv(OUTPUT_FILE, index=False)
 
-print(f"\n[SUCCESS] Generated exact 5-year breadth history (Starting {cutoff_date_str}).")
+print(f"\n[SUCCESS] Generated exact 5-year breadth history including Sector Breadth (Starting {cutoff_date_str}).")
 print(f"Saved to {OUTPUT_FILE}")
 print(f"Total trading days recorded: {len(df_breadth)}")
