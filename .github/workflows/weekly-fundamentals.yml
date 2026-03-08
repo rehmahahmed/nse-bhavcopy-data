@@ -67,17 +67,25 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Use the Nifty 750 filename
           FILE="nifty750_fundamentals.csv"
           
           if [ -f "$FILE" ]; then
+            # 1. Stage the file
             git add "$FILE"
             
+            # 2. Check if there are actually changes to commit
             if ! git diff --staged --quiet; then
+              # 3. Commit FIRST
               git commit -m "Automated update: Fundamentals Chunk $CHUNK_INDEX"
-              # Rebase to prevent version mismatch crashes
-              git pull origin main --rebase -X theirs
-              git push origin main
+              
+              # 4. Stash any random leftover files so Git doesn't panic
+              git stash
+              
+              # 5. Pull and Rebase safely
+              git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
+              
+              # 6. Push to repository
+              git push origin main || git push origin master
             else
               echo "No changes in $FILE to commit."
             fi
