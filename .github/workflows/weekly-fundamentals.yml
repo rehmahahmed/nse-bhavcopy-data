@@ -1,20 +1,10 @@
-name: Tri-Weekly Nifty 750 Fundamentals Update
+name: Weekly Nifty 750 Fundamentals
 
 on:
   schedule:
-    # Runs at 02:00 UTC every Monday (1), Wednesday (3), and Friday (5)
-    - cron: '0 2 * * 1,3,5'
-  workflow_dispatch: 
-    inputs:
-      chunk:
-        description: 'Manual Trigger: Which chunk to run? (0: 1-250, 1: 251-500, 2: 501-750)'
-        required: true
-        default: '0'
-        type: choice
-        options:
-          - '0'
-          - '1'
-          - '2'
+    # Runs at 02:00 UTC every Saturday
+    - cron: '0 2 * * 6'
+  workflow_dispatch: # Allows you to trigger it manually anytime
 
 permissions:
   contents: write 
@@ -37,29 +27,9 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy requests
-
-      - name: Determine Target Chunk
-        id: set_chunk
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "CHUNK_INDEX=${{ github.event.inputs.chunk }}" >> $GITHUB_ENV
-          else
-            # Get day of week (1=Mon, 3=Wed, 5=Fri)
-            DAY=$(date +%u) 
-            if [ "$DAY" -eq 1 ]; then
-              echo "CHUNK_INDEX=0" >> $GITHUB_ENV
-            elif [ "$DAY" -eq 3 ]; then
-              echo "CHUNK_INDEX=1" >> $GITHUB_ENV
-            else
-              echo "CHUNK_INDEX=2" >> $GITHUB_ENV
-            fi
-          fi
+          pip install pandas numpy yfinance
 
       - name: Run Fundamental Data Script
-        env:
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-          CHUNK_INDEX: ${{ env.CHUNK_INDEX }} # Pass the index to Python
         run: python update_fundamentals.py
 
       - name: Commit and Push changes
@@ -70,21 +40,15 @@ jobs:
           FILE="nifty750_fundamentals.csv"
           
           if [ -f "$FILE" ]; then
-            # 1. Stage the file
             git add "$FILE"
             
-            # 2. Check if there are actually changes to commit
             if ! git diff --staged --quiet; then
-              # 3. Commit FIRST
-              git commit -m "Automated update: Fundamentals Chunk $CHUNK_INDEX"
+              git commit -m "Automated update: Nifty 750 Fundamentals via yfinance"
               
-              # 4. Stash any random leftover files so Git doesn't panic
-              git stash
+              git stash # Safety mechanism
               
-              # 5. Pull and Rebase safely
               git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
               
-              # 6. Push to repository
               git push origin main || git push origin master
             else
               echo "No changes in $FILE to commit."
