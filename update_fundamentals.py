@@ -1,4 +1,4 @@
-import pandas as pd
+0.i2mport pandas as pd
 import numpy as np
 import time
 import os
@@ -44,69 +44,59 @@ print(f"Processing Chunk {CHUNK_INDEX}: Fetching {len(target_symbols)} stocks (I
 
 fundamental_data = []
 
-# ==========================================
-# 2. FETCH FUNDAMENTAL DATA (FMP)
-# ==========================================
+import yfinance as yf
+
+# ... (keep your setup and chunking logic) ...
+
 for i, symbol in enumerate(target_symbols):
     symbol = str(symbol).strip()
-    fmp_symbol = f"{symbol}.NS"
+    yf_symbol = f"{symbol}.NS"
     
     qoq_profit, qtr_profit_var, qoq_sales, opm = np.nan, np.nan, np.nan, np.nan
     
     try:
-        url = f"https://financialmodelingprep.com/api/v3/income-statement/{fmp_symbol}?period=quarter&limit=5&apikey={FMP_API_KEY}"
-        response = requests.get(url)
+        ticker = yf.Ticker(yf_symbol)
+        # Fetch the quarterly income statement
+        inc_stmt = ticker.quarterly_income_stmt
         
-        if response.status_code == 200:
-            data = response.json()
+        if not inc_stmt.empty and len(inc_stmt.columns) >= 2:
+            # yfinance returns dates as columns, sorted newest to oldest
+            latest_qtr = inc_stmt.columns[0]
+            prev_qtr = inc_stmt.columns[1]
             
-            if len(data) > 0:
-                latest = data[0]
-                op_inc = latest.get('operatingIncome', 0)
-                tot_rev = latest.get('revenue', 0)
-                if tot_rev and tot_rev != 0:
+            # 1. Operating Profit Margin (OPM)
+            if 'Operating Income' in inc_stmt.index and 'Total Revenue' in inc_stmt.index:
+                op_inc = inc_stmt.loc['Operating Income', latest_qtr]
+                tot_rev = inc_stmt.loc['Total Revenue', latest_qtr]
+                if pd.notna(op_inc) and pd.notna(tot_rev) and tot_rev != 0:
                     opm = (op_inc / tot_rev) * 100
-                    
-            if len(data) >= 2:
-                latest = data[0]
-                prev = data[1]
-                curr_rev = latest.get('revenue', 0)
-                prev_rev = prev.get('revenue', 0)
-                if prev_rev and prev_rev != 0:
+
+            # 2. QoQ Sales %
+            if 'Total Revenue' in inc_stmt.index:
+                curr_rev = inc_stmt.loc['Total Revenue', latest_qtr]
+                prev_rev = inc_stmt.loc['Total Revenue', prev_qtr]
+                if pd.notna(curr_rev) and pd.notna(prev_rev) and prev_rev != 0:
                     qoq_sales = ((curr_rev / prev_rev) - 1) * 100
-                    
-                curr_ni = latest.get('netIncome', 0)
-                prev_ni = prev.get('netIncome', 0)
-                if prev_ni and prev_ni != 0:
+
+            # 3. QoQ Profit %
+            if 'Net Income' in inc_stmt.index:
+                curr_ni = inc_stmt.loc['Net Income', latest_qtr]
+                prev_ni = inc_stmt.loc['Net Income', prev_qtr]
+                if pd.notna(curr_ni) and pd.notna(prev_ni) and prev_ni != 0:
                     qoq_profit = ((curr_ni - prev_ni) / abs(prev_ni)) * 100
-                    
-            if len(data) >= 5:
-                latest = data[0]
-                yoy = data[4] 
-                curr_ni = latest.get('netIncome', 0)
-                yoy_ni = yoy.get('netIncome', 0)
-                if yoy_ni and yoy_ni != 0:
+            
+            # 4. YoY Quarterly Profit Var % (Needs at least 5 quarters of data)
+            if len(inc_stmt.columns) >= 5 and 'Net Income' in inc_stmt.index:
+                yoy_qtr = inc_stmt.columns[4] # The quarter from exactly 1 year ago
+                yoy_ni = inc_stmt.loc['Net Income', yoy_qtr]
+                if pd.notna(curr_ni) and pd.notna(yoy_ni) and yoy_ni != 0:
                     qtr_profit_var = ((curr_ni - yoy_ni) / abs(yoy_ni)) * 100
 
     except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
+        print(f"Error fetching {symbol} via yfinance: {e}")
         pass
 
-    update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    fundamental_data.append({
-        'Symbol': symbol,
-        'Qtr Profit Var %': round(qtr_profit_var, 2) if pd.notna(qtr_profit_var) else np.nan,
-        'QoQ profits %': round(qoq_profit, 2) if pd.notna(qoq_profit) else np.nan,
-        'QoQ sales %': round(qoq_sales, 2) if pd.notna(qoq_sales) else np.nan,
-        'OPM': round(opm, 2) if pd.notna(opm) else np.nan,
-        'Last_Updated': update_time_str
-    })
-    
-    if (i + 1) % 50 == 0:
-        print(f"Processed {i + 1} / {len(target_symbols)} stocks...")
-        
-    time.sleep(0.1) 
-
+# ... (keep your append and CSV saving logic) ...
 # ==========================================
 # 3. MERGE & SAVE TO CSV
 # ==========================================
