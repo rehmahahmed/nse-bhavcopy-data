@@ -53,11 +53,12 @@ for i, symbol in enumerate(nifty500_symbols):
             ltp_response = smartApi.ltpData("NSE", f"{symbol_str}-EQ", token_map[symbol_str])
             
             # 1. IF SUCCESS: Check if we got a valid status AND the 'ltp' key actually exists
+            # 1. IF SUCCESS: Check if we got a valid status AND the 'ltp' key actually exists
             if ltp_response and ltp_response.get('status') and ltp_response.get('data') and 'ltp' in ltp_response['data']:
                 live_data.append({
                     "Symbol": symbol_str,
                     "CMP": float(ltp_response['data']['ltp']),
-                    "Last_Updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "Last_Updated": datetime.datetime.now(ist_offset).strftime("%Y-%m-%d %H:%M:%S")
                 })
                 break # Success! Break out of the retry loop
                 
