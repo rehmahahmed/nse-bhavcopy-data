@@ -44,23 +44,15 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          if [ -f live_cmp.csv ]; then
-            # 1. ADD the new file first so Git knows it is safe
-            git add live_cmp.csv
-            
-            # 2. CHECK for changes and COMMIT
-            if ! git diff --staged --quiet; then
-              git commit -m "Automated 45-min live_cmp.csv update"
-              
-              # 3. PULL background changes smoothly using rebase
-              # '-X theirs' auto-resolves conflicts by prioritizing your newly generated local file
-              git pull origin main --rebase -X theirs
-              
-              # 4. PUSH to your repo
-              git push origin main
-            else
-              echo "No changes in live_cmp.csv to commit."
-            fi
+          # Stage BOTH the dashboard AND the background database!
+          git add daily_rs_data.csv
+          git add historical_db.csv
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "Automated daily RS update"
+            git stash
+            git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
+            git push origin main || git push origin master
           else
-            echo "live_cmp.csv was not generated. Skipping commit."
+            echo "No changes to commit."
           fi
