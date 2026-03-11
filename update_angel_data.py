@@ -6,8 +6,12 @@ import json
 import pyotp
 import numpy as np
 import os
+import pandas_ta as ta
 from SmartApi import SmartConnect
 import yfinance as yf
+import warnings
+
+warnings.filterwarnings('ignore')
 
 # ==========================================
 # 1. CREDENTIALS & CONFIGURATION
@@ -73,7 +77,6 @@ token_map = {inst['symbol'].replace('-EQ', ''): inst['token']
 # ==========================================
 # 4. LOAD SYMBOLS & FETCH MISSING DATA
 # ==========================================
-# Cleaned up variables to reflect Nifty 750
 df_nifty750 = pd.read_csv('nifty750list.csv')
 nifty750_symbols = df_nifty750['Symbol'].tolist()
 
@@ -82,11 +85,11 @@ new_data_rows = []
 print(f"Fetching data for {len(nifty750_symbols)} stocks...")
 
 for i, symbol in enumerate(nifty750_symbols):
-    symbol = str(symbol).strip()
-    if symbol not in token_map: continue
+    symbol_str = str(symbol).strip()
+    if symbol_str not in token_map: continue
 
     historicParam = {
-        "exchange": "NSE", "symboltoken": token_map[symbol],
+        "exchange": "NSE", "symboltoken": token_map[symbol_str],
         "interval": INTERVAL, "fromdate": FROM_DATE, "todate": TO_DATE
     }
 
@@ -100,7 +103,7 @@ for i, symbol in enumerate(nifty750_symbols):
                     date_str = row[0][:10]
                     new_data_rows.append({
                         'Date': date_str,
-                        'Symbol': symbol,
+                        'Symbol': symbol_str,
                         'Open': row[1],
                         'High': row[2],
                         'Low': row[3],
@@ -110,15 +113,12 @@ for i, symbol in enumerate(nifty750_symbols):
                 break 
             
             elif hist_data and hist_data.get('errorcode') == 'AB1004':
-                print(f"Rate limited on {symbol}. Cooling down for 3s... (Attempt {attempt+1}/{max_retries})")
                 time.sleep(3)
                 
             else:
-                print(f"Null or empty data for {symbol}. Retrying in 2s... (Attempt {attempt+1}/{max_retries})")
                 time.sleep(2)
                 
         except Exception as e:
-            print(f"Network error on {symbol}: {e}. Retrying in 2s... (Attempt {attempt+1}/{max_retries})")
             time.sleep(2)
             
     time.sleep(0.6) 
@@ -147,21 +147,40 @@ if df_combined.empty:
     exit()
 
 df_combined = df_combined.dropna(subset=['Close'])
-print("Calculating RS, Return percentages, and Sharpe...")
+print("Calculating RS, Return percentages, and Technical Indicators...")
 df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
 
 # Define trading day periods
 DAYS_1D, DAYS_1W, DAYS_1M = 1, 5, 21
 DAYS_3M, DAYS_6M, DAYS_9M, DAYS_12M = 63, 126, 189, 252
 
-# Calculate 200 SMA and Above/Below flag
-df_combined['SMA_200'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: x.rolling(window=200).mean())
+# --- NEW: Calculate Strategy Indicators (SMA, EMA, RSI) ---
+df_combined['SMA_50'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.sma(x, length=50))
+df_combined['SMA_200'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.sma(x, length=200))
+df_combined['EMA_9'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.ema(x, length=9))
+df_combined['RSI_14'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.rsi(x, length=14))
+
+# --- NEW: Calculate SuperTrend for Stocks ---
+print("Calculating SuperTrend for all stocks...")
+st_list = []
+for sym, group in df_combined.groupby('Symbol'):
+    st = ta.supertrend(high=group['High'], low=group['Low'], close=group['Close'], length=15, multiplier=2.75)
+    if st is not None:
+        st_res = pd.DataFrame({'ST_15_3': st.iloc[:, 0]}, index=group.index)
+    else:
+        st_res = pd.DataFrame({'ST_15_3': np.nan}, index=group.index)
+    st_list.append(st_res)
+
+df_combined['ST_15_3'] = pd.concat(st_list)['ST_15_3']
+
 df_combined['Above_SMA_200'] = np.where(
     df_combined['SMA_200'].isna(), 
     'N/A', 
     np.where(df_combined['Close'] > df_combined['SMA_200'], 'Yes', 'No')
 )
 
+# Return Calculations
+df_combined['ret_1m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1M)
 df_combined['ret_3m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_3M)
 df_combined['ret_6m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_6M)
 df_combined['ret_9m'] = df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_9M)
@@ -184,7 +203,7 @@ df_combined['RS'] = np.where(df_combined['RS'] == 100, 99, df_combined['RS'])
 
 df_combined['1D Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1D) * 100).round(2)
 df_combined['1W Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1W) * 100).round(2)
-df_combined['1M Return %'] = (df_combined.groupby('Symbol')['Close'].pct_change(periods=DAYS_1M) * 100).round(2)
+df_combined['1M Return %'] = (df_combined['ret_1m'] * 100).round(2)
 df_combined['3M Return %'] = (df_combined['ret_3m'] * 100).round(2)
 df_combined['6M Return %'] = (df_combined['ret_6m'] * 100).round(2)
 
@@ -220,8 +239,29 @@ df_combined['Weighted Sharpe'] = (
 df_combined.to_csv(HISTORY_FILENAME, index=False)
 
 # ==========================================
-# 6. EXTRACT FOR DASHBOARD 
+# 6. FETCH INDEX REGIME & EXTRACT DASHBOARD
 # ==========================================
+print("Fetching Nifty 500 Index data for market regime filter...")
+try:
+    index_ticker = "^CRSLDX" # Nifty 500
+    index_data = yf.download(index_ticker, period="6mo", progress=False, auto_adjust=False)
+    
+    if index_data.empty:
+        index_data = yf.download("^NSEI", period="6mo", progress=False, auto_adjust=False)
+
+    if isinstance(index_data.columns, pd.MultiIndex):
+        index_data.columns = index_data.columns.droplevel(1)
+        
+    st_idx = ta.supertrend(high=index_data['High'], low=index_data['Low'], close=index_data['Close'], length=15, multiplier=2.75)
+    
+    if st_idx is not None:
+        index_st_dir_latest = 'Up' if st_idx.iloc[-1, 1] == 1 else 'Down'
+    else:
+        index_st_dir_latest = 'Up'
+except Exception as e:
+    print(f"Error fetching index: {e}")
+    index_st_dir_latest = 'Up'
+
 print("Extracting the latest rows for the dashboard...")
 
 df_latest = df_combined.groupby('Symbol').tail(1).copy()
@@ -233,14 +273,26 @@ df_final = pd.merge(df_latest, df_nifty750[['Symbol', 'Industry']], on='Symbol',
 
 update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 df_final['Last_Updated'] = update_time_str
-
-# --- CHANGED: Swapped Google Finance for TradingView ---
 df_final['Chart_Link'] = "https://in.tradingview.com/chart/?symbol=NSE:" + df_final['Symbol']
 
+# --- NEW: Map exactly to calculate_allocations.py requirements ---
+df_final['Prev_Close'] = df_final['Close']
+df_final['1M_Return'] = df_final['ret_1m']
+df_final['3M_Return'] = df_final['ret_3m']
+df_final['6M_Return'] = df_final['ret_6m']
+df_final['RS_Score'] = df_final['RS']
+df_final['Index_ST_DIR'] = index_st_dir_latest
+
+# Exporting all the columns required for both the PowerBI dashboard and the allocation script
 final_columns = [
     'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
-    '3M Return %', '6M Return %', 'Above_SMA_200', 'Weighted Sharpe', 'weighted_avg', 'RS', 'Last_Updated', 'Chart_Link'
+    '3M Return %', '6M Return %', 'Above_SMA_200', 'Weighted Sharpe', 
+    'weighted_avg', 'RS', 'Last_Updated', 'Chart_Link',
+    # --- Allocation Script Needs ---
+    'Prev_Close', 'RSI_14', '1M_Return', '3M_Return', '6M_Return', 
+    'SMA_50', 'SMA_200', 'EMA_9', 'ST_15_3', 'RS_Score', 'Index_ST_DIR'
 ]
+
 df_final = df_final[final_columns]
 
 df_final.to_csv(CSV_FILENAME, index=False)
