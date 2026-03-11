@@ -17,15 +17,24 @@ except FileNotFoundError as e:
 df = pd.merge(live_df, daily_df, on='Symbol', how='inner')
 
 # ==========================================
-# 1. LIVE RETURN CALCULATION (T and T-1)
+# 1. LIVE RETURN CALCULATION (T, T-1, T-2 Fallback)
 # ==========================================
 # Let P_t   = Today's live price (CMP)
 # Let P_t_1 = Yesterday's closing price (Prev_Close)
 P_t = df['CMP']
 P_t_1 = df['Prev_Close']
 
-# Explicit T and T-1 percentage change formula
-df['Live_1D_Return'] = (P_t - P_t_1) / P_t_1
+# Standard Live Return (Decimal format)
+live_return = (P_t - P_t_1) / P_t_1
+
+# FALLBACK LOGIC: If T == T-1 (Market is closed/hasn't opened), use T-2's return.
+# Note: The daily file stores '1D Return %' as a percentage (e.g., 2.5), 
+# so we divide by 100 to match our decimal logic (0.025).
+df['Live_1D_Return'] = np.where(
+    P_t == P_t_1, 
+    df['1D Return %'] / 100, 
+    live_return
+)
 
 # ==========================================
 # 2. STRATEGY PARAMETERS
