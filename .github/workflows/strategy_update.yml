@@ -2,8 +2,8 @@ name: Daily Strategy Backtest & Allocations
 
 on:
   schedule:
-    # Runs at 10:30 AM UTC, which is 4:00 PM IST, Monday through Friday
-    - cron: '30 10 * * 1-5'
+    # Runs at 09:30 AM UTC, which is exactly 3:00 PM IST, Monday through Friday
+    - cron: '30 09 * * 1-5'
   workflow_dispatch: 
 
 permissions:
@@ -24,9 +24,14 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy pandas_ta yfinance pytz
+          pip install pandas numpy pandas_ta yfinance pytz pyotp smartapi-python websocket-client
           
       - name: Run EOD Strategy Script
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
         run: python run_strategy.py
 
       - name: Commit and Push CSVs
@@ -38,7 +43,7 @@ jobs:
           git add daily_allocations.csv historical_portfolio_value.csv || true
           
           if ! git diff --staged --quiet; then
-            git commit -m "Automated EOD Strategy Update"
+            git commit -m "Automated Strategy Update (3:00 PM Execution)"
             git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
             git push origin main || git push origin master
           else
