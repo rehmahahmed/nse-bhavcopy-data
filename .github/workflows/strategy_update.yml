@@ -24,7 +24,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy pandas_ta yfinance pytz pyotp smartapi-python websocket-client
+          pip install pandas numpy pandas_ta yfinance pytz pyotp smartapi-python logzero websocket-client
           
       - name: Run EOD Strategy Script
         env:
