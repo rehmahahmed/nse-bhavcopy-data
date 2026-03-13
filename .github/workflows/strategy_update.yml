@@ -1,10 +1,9 @@
-name: Daily EOD Strategy Backtest & Allocation
+name: Daily Strategy Backtest & Allocations
 
 on:
   schedule:
-    # Runs at 12:00 PM UTC, which is 5:30 PM IST, Monday through Friday
-    # Ensure this runs AFTER your Angel API fetcher completes
-    - cron: '00 12 * * 1-5'
+    # Runs at 10:30 AM UTC, which is 4:00 PM IST, Monday through Friday
+    - cron: '30 10 * * 1-5'
   workflow_dispatch: 
 
 permissions:
@@ -35,13 +34,12 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add historical_portfolio_value.csv daily_allocations.csv || true
+          # Add the generated files
+          git add daily_allocations.csv historical_portfolio_value.csv || true
           
           if ! git diff --staged --quiet; then
-            git commit -m "Automated EOD Strategy update (Equity & Allocations)"
-            
+            git commit -m "Automated EOD Strategy Update"
             git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
-            
             git push origin main || git push origin master
           else
             echo "No changes to commit."
