@@ -56,9 +56,19 @@ for i, symbol in enumerate(nifty500_symbols):
             
             # 1. SUCCESS
             if ltp_response and ltp_response.get('status') and ltp_response.get('data') and 'ltp' in ltp_response['data']:
+                cmp = float(ltp_response['data']['ltp'])
+                prev_close = float(ltp_response['data']['close'])
+                
+                # Calculate 1 Day Return (%)
+                if prev_close > 0:
+                    one_day_return = round(((cmp - prev_close) / prev_close) * 100, 2)
+                else:
+                    one_day_return = 0.0
+                
                 live_data.append({
                     "Symbol": symbol_str,
-                    "CMP": float(ltp_response['data']['ltp']),
+                    "CMP": cmp,
+                    "1_Day_Return_%": one_day_return,
                     "Last_Updated": datetime.datetime.now(ist_offset).strftime("%Y-%m-%d %H:%M:%S")
                 })
                 break 
