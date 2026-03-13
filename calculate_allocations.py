@@ -33,14 +33,13 @@ token_map = {inst['symbol'].replace('-EQ', ''): inst['token']
              for inst in instrument_list if inst['exch_seg'] == 'NSE' and inst['symbol'].endswith('-EQ')}
 
 # ==========================================
-# 2. FETCH LIVE DATA FROM ANGEL ONE
+# 2. FETCH EOD DATA FROM ANGEL ONE
 # ==========================================
-# Load the master list of stocks to scan
 df_nifty = pd.read_csv('nifty750list.csv')
 symbols_to_scan = df_nifty['Symbol'].tolist()
 
 live_data = []
-print(f"Fetching live prices for {len(symbols_to_scan)} stocks...")
+print(f"Fetching End-of-Day prices for {len(symbols_to_scan)} stocks...")
 
 for i, symbol in enumerate(symbols_to_scan):
     symbol_str = str(symbol).strip()
@@ -50,15 +49,17 @@ for i, symbol in enumerate(symbols_to_scan):
         try:
             ltp_response = smartApi.ltpData("NSE", f"{symbol_str}-EQ", token_map[symbol_str])
             if ltp_response and ltp_response.get('status') and ltp_response.get('data'):
+                # After market close, 'ltp' is Today's Close.
                 cmp = float(ltp_response['data']['ltp'])
+                today_low = float(ltp_response['data']['low'])
                 prev_close = float(ltp_response['data']['close'])
                 
-                # Live 1D Return Calculation
                 one_day_return = ((cmp - prev_close) / prev_close) if prev_close > 0 else 0.0
                 
                 live_data.append({
                     "Symbol": symbol_str,
                     "CMP": cmp,
+                    "Today_Low": today_low,
                     "Prev_Close": prev_close,
                     "Live_1D_Return": one_day_return
                 })
@@ -79,10 +80,9 @@ df_live = pd.DataFrame(live_data)
 # ==========================================
 # 3. MERGE LIVE DATA WITH EOD INDICATORS
 # ==========================================
-print("Merging live data with daily indicators...")
+print("Merging data with daily indicators...")
 try:
     daily_df = pd.read_csv('daily_rs_data.csv')
-    # Clean symbol in daily_df if it has '.NS' suffix
     daily_df['Symbol'] = daily_df['Symbol'].str.replace('.NS', '', regex=False)
 except FileNotFoundError:
     print("Error: daily_rs_data.csv not found. Please run your EOD indicator scanner first.")
@@ -118,38 +118,42 @@ def get_total_equity(current_state, live_df):
 # 5. EVALUATE EXITS (SELL RULES)
 # ==========================================
 positions = state['positions']
-print("\nChecking for Sell Signals...")
+print("\nEvaluating End-of-Day Sell Signals...")
 
 for sym, pos in list(positions.items()):
     row = df[df['Symbol'] == sym]
     if row.empty: continue
     
-    cmp = row['CMP'].values[0]
-    prev_close = row['Prev_Close'].values[0]  # This is yesterday's close from Angel
+    cmp = row['CMP'].values[0]          # Today's final Close
+    today_low = row['Today_Low'].values[0] # Today's lowest price
     st_15_3 = row['ST_15_3'].values[0]
     sma_200 = row['SMA_200'].values[0]
     
     sell_reason = None
+    exit_price = cmp
     
-    # EOD Sells (Based on yesterday's closing price vs yesterday's indicators)
-    if prev_close < st_15_3:
-        sell_reason = "Close < ST(15,3)"
-    elif prev_close < sma_200:
-        sell_reason = "Close < 200 SMA"
-    # Intraday Stoploss (Based on live CMP)
-    elif cmp <= pos['sl_price']:
+    # 1. Intraday Stoploss Check (Did it dip below SL at any point today?)
+    if today_low <= pos['sl_price']:
         sell_reason = "Intraday SL Hit"
+        # If it closed below SL, exit at close. Otherwise, assume we exited at exactly the SL price.
+        exit_price = min(cmp, pos['sl_price']) 
+        
+    # 2. EOD Indicator Sells (Did it close below the indicators?)
+    elif cmp < st_15_3:
+        sell_reason = "Closed < ST(15,3)"
+    elif cmp < sma_200:
+        sell_reason = "Closed < 200 SMA"
         
     if sell_reason:
-        print(f"  🔴 SELL: {sym} at ₹{cmp} | Reason: {sell_reason}")
-        state['cash'] += (pos['qty'] * cmp)
+        print(f"  🔴 SELL: {sym} | Exit Price: ₹{exit_price:.2f} | Reason: {sell_reason}")
+        state['cash'] += (pos['qty'] * exit_price)
         del positions[sym]
 
 # ==========================================
-# 6. EVALUATE ENTRIES (BUY RULES)
+# 6. EVALUATE ENTRIES (BUY RULES FOR TOMORROW)
 # ==========================================
 open_slots = MAX_POSITIONS - len(positions)
-print(f"\nOpen Portfolio Slots: {open_slots}")
+print(f"\nOpen Portfolio Slots for Tomorrow: {open_slots}")
 
 if open_slots > 0:
     is_index_down = df['Index_ST_DIR'] == 'Down'
@@ -179,7 +183,7 @@ if open_slots > 0:
     
     for _, row in new_buys.iterrows():
         sym = row['Symbol']
-        cmp = row['CMP']
+        cmp = row['CMP'] # This represents tomorrow's target entry price
         idx_dir = row['Index_ST_DIR']
         
         total_equity = get_total_equity(state, df)
@@ -248,7 +252,26 @@ export_data.append({
 output_df = pd.DataFrame(export_data)
 output_df.to_csv('target_allocations.csv', index=False)
 
+# ==========================================
+# 8. UPDATE DAILY PORTFOLIO VALUE CSV
+# ==========================================
+portfolio_csv_path = 'daily_portfolio_value.csv'
+current_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+
+if os.path.exists(portfolio_csv_path):
+    history_df = pd.read_csv(portfolio_csv_path)
+else:
+    history_df = pd.DataFrame(columns=['Date', 'Total_Portfolio_Value'])
+
+if current_date_str in history_df['Date'].values:
+    history_df.loc[history_df['Date'] == current_date_str, 'Total_Portfolio_Value'] = round(total_equity, 2)
+else:
+    new_row = pd.DataFrame([{'Date': current_date_str, 'Total_Portfolio_Value': round(total_equity, 2)}])
+    history_df = pd.concat([history_df, new_row], ignore_index=True)
+
+history_df.to_csv(portfolio_csv_path, index=False)
+
 print("\n" + "="*50)
-print(f"Total Portfolio Value: ₹{total_equity:,.2f} | Cash: ₹{state['cash']:,.2f}")
-print(f"Successfully exported target_allocations.csv for PowerBI.")
+print(f"End of Day Portfolio Value: ₹{total_equity:,.2f} | Cash: ₹{state['cash']:,.2f}")
+print("Successfully updated PowerBI allocations and Portfolio History.")
 print("="*50)
