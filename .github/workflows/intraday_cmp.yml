@@ -1,4 +1,4 @@
-name: 45-Min Market Price & Allocation Update
+name: 45-Min Live Market Price Update
 
 on:
   schedule:
@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas pyotp smartapi-python logzero websocket-client numpy
 
-      - name: Run CMP and Allocation Scripts
+      - name: Run Live CMP Script
         env:
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
@@ -38,23 +38,19 @@ jobs:
           ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
         run: |
           python update_live_csv.py
-          python calculate_allocations.py
 
       - name: Commit and Push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Stage both files
+          # Stage the live CMP file
           if [ -f live_cmp.csv ]; then
             git add live_cmp.csv
           fi
-          if [ -f target_allocations.csv ]; then
-            git add target_allocations.csv
-          fi
           
           if ! git diff --staged --quiet; then
-            git commit -m "Automated Live CMP and Allocations update"
+            git commit -m "Automated Live CMP update"
             git stash
             git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
             git push origin main || git push origin master
