@@ -4,8 +4,13 @@ import pandas_ta as ta
 import yfinance as yf
 import os
 import warnings
+import urllib.request
+import json
+import pyotp
+import time
 from datetime import datetime, timedelta
 import pytz
+from SmartApi import SmartConnect
 
 warnings.filterwarnings('ignore')
 
@@ -20,10 +25,40 @@ INITIAL_CAPITAL = 100000.0
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
-# We fetch 5 years + 250 days to ensure the 200 SMA and 12M Returns have enough runway to calculate
+# Fetch 5 years + 250 days to ensure the 200 SMA and 12M Returns have enough runway to calculate
 start_date_str = (now_ist - timedelta(days=(5*365) + 250)).strftime('%Y-%m-%d')
 
 print(f"Running Standalone EOD Strategy. Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
+
+# ==========================================
+# 0. ANGEL ONE LOGIN (For 3 PM Live CMP)
+# ==========================================
+API_KEY = os.environ.get("ANGEL_API_KEY")
+CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
+PIN = os.environ.get("ANGEL_PIN")
+TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
+
+smartApi = None
+token_map = {}
+
+if API_KEY and CLIENT_CODE:
+    print("Connecting to Angel One API to fetch Live 3 PM CMPs...")
+    try:
+        smartApi = SmartConnect(api_key=API_KEY)
+        totp = pyotp.TOTP(TOTP_SECRET).now()
+        login_data = smartApi.generateSession(CLIENT_CODE, PIN, totp)
+        
+        if login_data['status']:
+            instrument_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+            response = urllib.request.urlopen(instrument_url)
+            instrument_list = json.loads(response.read())
+            token_map = {inst['symbol'].replace('-EQ', ''): inst['token'] 
+                         for inst in instrument_list if inst['exch_seg'] == 'NSE' and inst['symbol'].endswith('-EQ')}
+            print("Successfully authenticated with Angel One.")
+        else:
+            print("Angel Login Failed:", login_data['message'])
+    except Exception as e:
+        print(f"Error during Angel One authentication: {e}")
 
 # ==========================================
 # 1. LOAD TICKERS & FETCH YFINANCE DATA
@@ -40,7 +75,6 @@ try:
     nifty_tickers = [str(sym).strip() + '.NS' for sym in raw_symbols if pd.notna(sym)]
 except FileNotFoundError:
     print(f"Warning: {TICKER_FILE} not found. Using a fallback list.")
-    # Fallback to a few major tickers if the file is missing to prevent total failure
     nifty_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS"]
 
 print(f"Downloading historical data for {len(nifty_tickers)} tickers from {start_date_str}...")
@@ -102,7 +136,7 @@ df['RS_Score'] = df['RS_Score'].round(0).clip(lower=1, upper=99)
 
 df_bt = df.dropna(subset=['SMA_200', '12M_Return', 'RS_Score', 'ST_15_3']).copy()
 
-# Restrict the actual backtest starting point to exactly 5 years ago from today
+# Restrict backtest starting point to exactly 5 years ago
 backtest_start = pd.to_datetime((now_ist - timedelta(days=5*365)).strftime('%Y-%m-%d'))
 df_bt = df_bt[df_bt['DATE'] >= backtest_start]
 
@@ -195,7 +229,8 @@ for current_date in unique_dates:
                 cost = qty * net_buy_price
                 positions[ticker] = {
                     'raw_entry_price': execution_price, 'qty': qty, 
-                    'entry_date': current_date, 'index_st': row['Prev_Index_ST_DIR']
+                    'entry_date': current_date, 'index_st': row['Prev_Index_ST_DIR'],
+                    'is_new': False # Mark as historical buy
                 }
                 capital -= cost
 
@@ -209,10 +244,11 @@ for current_date in unique_dates:
     equity_curve.append({'Date': current_date, 'Equity': daily_portfolio_value})
 
 # ==========================================
-# 4. PREPARE TODAY'S TARGETS & EXPORT
+# 4. PREPARE TODAY'S 3:00 PM TARGETS & EXPORT
 # ==========================================
 latest_date = unique_dates[-1]
 last_day_data = df_bt[df_bt['DATE'] == latest_date].set_index('TICKER')
+latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 
 sells_for_tomorrow = []
 for ticker, pos in positions.items():
@@ -227,34 +263,51 @@ for t in sells_for_tomorrow: del positions[t]
 buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS_Score', ascending=False)
 for ticker, row in buy_candidates.iterrows():
     if len(positions) < MAX_POSITIONS and ticker not in positions:
+        
+        # --- Fetch Live CMP from Angel at 3 PM ---
+        clean_ticker = ticker.replace('.NS', '')
+        cmp = None
+        
+        if smartApi and clean_ticker in token_map:
+            try:
+                ltp_response = smartApi.ltpData("NSE", f"{clean_ticker}-EQ", token_map[clean_ticker])
+                if ltp_response and ltp_response.get('status') and ltp_response.get('data'):
+                    cmp = float(ltp_response['data']['ltp'])
+            except Exception as e:
+                pass
+        
+        # Fallback to the latest available close if Angel is unavailable
+        if cmp is None:
+            cmp = row['CLOSE']
+            
+        invest_amount = POSITION_SIZE if latest_equity >= POSITION_SIZE else latest_equity
+        net_buy_price = cmp * (1 + BROKERAGE_RATE)
+        qty = int(invest_amount // net_buy_price) if net_buy_price > 0 else 0
+
         positions[ticker] = {
-            'raw_entry_price': 'Market Open',
-            'qty': 'TBD',
-            'entry_date': 'Pending Next Open',
-            'index_st': row['Index_ST_DIR']
+            'raw_entry_price': cmp,
+            'qty': qty,
+            'entry_date': now_ist.strftime('%Y-%m-%d'),
+            'index_st': row['Index_ST_DIR'],
+            'is_new': True # Flag it so it says "BUY" instead of "HOLD"
         }
 
 # --- File 1: Allocations Output ---
 alloc_list = []
-latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 
 for t, p in positions.items():
     sl_multiplier = 0.85 if p.get('index_st', 'Up') == 'Down' else 0.87
+    action = 'BUY' if p.get('is_new', False) else 'HOLD'
     
-    if p['raw_entry_price'] == 'Market Open':
-        alloc_list.append({
-            'Ticker': t, 'Action': 'BUY', 'Entry_Price': 'TBD', 
-            'Quantity': 'TBD', 'Stoploss': 'TBD', 
-            'Allocation_%': round((1.0 / MAX_POSITIONS) * 100, 2), 
-            'Entry_Date': p['entry_date']
-        })
-    else:
-        alloc_list.append({
-            'Ticker': t, 'Action': 'HOLD', 'Entry_Price': round(p['raw_entry_price'], 2), 
-            'Quantity': p['qty'], 'Stoploss': round(p['raw_entry_price'] * sl_multiplier, 2), 
-            'Allocation_%': round(((p['qty'] * p['raw_entry_price']) / latest_equity) * 100, 2), 
-            'Entry_Date': p['entry_date']
-        })
+    alloc_list.append({
+        'Ticker': t, 
+        'Action': action, 
+        'Entry_Price': round(p['raw_entry_price'], 2), 
+        'Quantity': p['qty'], 
+        'Stoploss': round(p['raw_entry_price'] * sl_multiplier, 2), 
+        'Allocation_%': round(((p['qty'] * p['raw_entry_price']) / latest_equity) * 100, 2) if latest_equity > 0 else 0, 
+        'Entry_Date': p['entry_date']
+    })
 
 alloc_df = pd.DataFrame(alloc_list)
 alloc_df.to_csv(FILE_1_ALLOCATIONS, index=False)
