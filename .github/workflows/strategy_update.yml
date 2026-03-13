@@ -1,0 +1,48 @@
+name: Daily EOD Strategy Backtest & Allocation
+
+on:
+  schedule:
+    # Runs at 12:00 PM UTC, which is 5:30 PM IST, Monday through Friday
+    # Ensure this runs AFTER your Angel API fetcher completes
+    - cron: '00 12 * * 1-5'
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  run-strategy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pandas_ta yfinance pytz
+          
+      - name: Run EOD Strategy Script
+        run: python run_strategy.py
+
+      - name: Commit and Push CSVs
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add historical_portfolio_value.csv daily_allocations.csv || true
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "Automated EOD Strategy update (Equity & Allocations)"
+            
+            git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
+            
+            git push origin main || git push origin master
+          else
+            echo "No changes to commit."
+          fi
