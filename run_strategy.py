@@ -169,12 +169,11 @@ for col in shift_cols:
 
 df_bt['Prev_Buy_Signal'] = df_bt['Prev_Buy_Signal'].fillna(False).astype(bool)
 
-print("Running Backtest Engine...")
+print("Running Backtest Engine with Dynamic Position Sizing (Compounding)...")
 capital = INITIAL_CAPITAL
 positions = {}
 equity_curve = []
 unique_dates = sorted(df_bt['DATE'].unique())
-POSITION_SIZE = INITIAL_CAPITAL / MAX_POSITIONS
 BROKERAGE_RATE = 0.005
 
 for current_date in unique_dates:
@@ -217,10 +216,23 @@ for current_date in unique_dates:
 
     # Process Buys
     buy_signals = daily_data[daily_data['Prev_Buy_Signal']].sort_values(by='Prev_RS_Score', ascending=False)
+    
+    # NEW: Calculate current total equity to determine dynamic position size
+    current_portfolio_value = capital
+    for t, p in positions.items():
+        if t in daily_data.index:
+            current_portfolio_value += p['qty'] * daily_data.loc[t, 'CLOSE']
+        else:
+            current_portfolio_value += p['qty'] * p['raw_entry_price']
+            
+    dynamic_position_size = current_portfolio_value / MAX_POSITIONS
+
     for ticker, row in buy_signals.iterrows():
         if row['HIGH'] == row['LOW']: continue
         if len(positions) < MAX_POSITIONS and ticker not in positions:
-            invest_amount = POSITION_SIZE if capital >= POSITION_SIZE else capital
+            
+            # Use dynamic position sizing so the strategy reinvests profits
+            invest_amount = dynamic_position_size if capital >= dynamic_position_size else capital
             execution_price = row['OPEN']
             net_buy_price = execution_price * (1 + BROKERAGE_RATE)
 
@@ -230,7 +242,7 @@ for current_date in unique_dates:
                 positions[ticker] = {
                     'raw_entry_price': execution_price, 'qty': qty, 
                     'entry_date': current_date, 'index_st': row['Prev_Index_ST_DIR'],
-                    'is_new': False # Mark as historical buy
+                    'is_new': False 
                 }
                 capital -= cost
 
@@ -250,21 +262,28 @@ latest_date = unique_dates[-1]
 last_day_data = df_bt[df_bt['DATE'] == latest_date].set_index('TICKER')
 latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 
-sells_for_tomorrow = []
+# We need to simulate the available cash for today's 3 PM buys
+simulated_capital = capital
+sells_for_today = []
+
 for ticker, pos in positions.items():
     if ticker in last_day_data.index:
         row = last_day_data.loc[ticker]
         todays_close, todays_st, todays_sma = row['CLOSE'], row['ST_15_3'], row['SMA_200']
         if pd.notna(todays_close) and ((pd.notna(todays_st) and todays_close < todays_st) or (pd.notna(todays_sma) and todays_close < todays_sma)):
-            sells_for_tomorrow.append(ticker)
+            sells_for_today.append(ticker)
+            # Add cash back to simulated pool for new buys
+            simulated_capital += pos['qty'] * todays_close * (1 - BROKERAGE_RATE)
 
-for t in sells_for_tomorrow: del positions[t]
+for t in sells_for_today: del positions[t]
 
 buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS_Score', ascending=False)
+dynamic_position_size = latest_equity / MAX_POSITIONS
+
 for ticker, row in buy_candidates.iterrows():
     if len(positions) < MAX_POSITIONS and ticker not in positions:
         
-        # --- Fetch Live CMP from Angel at 3 PM ---
+        # Fetch Live CMP from Angel at 3 PM
         clean_ticker = ticker.replace('.NS', '')
         cmp = None
         
@@ -280,17 +299,19 @@ for ticker, row in buy_candidates.iterrows():
         if cmp is None:
             cmp = row['CLOSE']
             
-        invest_amount = POSITION_SIZE if latest_equity >= POSITION_SIZE else latest_equity
+        invest_amount = dynamic_position_size if simulated_capital >= dynamic_position_size else simulated_capital
         net_buy_price = cmp * (1 + BROKERAGE_RATE)
         qty = int(invest_amount // net_buy_price) if net_buy_price > 0 else 0
 
-        positions[ticker] = {
-            'raw_entry_price': cmp,
-            'qty': qty,
-            'entry_date': now_ist.strftime('%Y-%m-%d'),
-            'index_st': row['Index_ST_DIR'],
-            'is_new': True # Flag it so it says "BUY" instead of "HOLD"
-        }
+        if qty > 0:
+            positions[ticker] = {
+                'raw_entry_price': cmp,
+                'qty': qty,
+                'entry_date': now_ist.strftime('%Y-%m-%d'),
+                'index_st': row['Index_ST_DIR'],
+                'is_new': True 
+            }
+            simulated_capital -= (qty * net_buy_price)
 
 # --- File 1: Allocations Output ---
 alloc_list = []
