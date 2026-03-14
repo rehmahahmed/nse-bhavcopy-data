@@ -25,9 +25,6 @@ INITIAL_CAPITAL = 100000.0
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
-# Fetch 5 years + 250 days to ensure the 200 SMA and 12M Returns have enough runway to calculate
-start_date_str = (now_ist - timedelta(days=(5*365) + 250)).strftime('%Y-%m-%d')
-
 print(f"Running Standalone EOD Strategy. Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ==========================================
@@ -77,8 +74,9 @@ except FileNotFoundError:
     print(f"Warning: {TICKER_FILE} not found. Using a fallback list.")
     nifty_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS"]
 
-print(f"Downloading historical data for {len(nifty_tickers)} tickers from {start_date_str}...")
-raw_data = yf.download(nifty_tickers, start=start_date_str, progress=False, auto_adjust=False)
+# Restored: Hardcoded to 2020-01-01 to match baseline 376k results
+print(f"Downloading historical data for {len(nifty_tickers)} tickers...")
+raw_data = yf.download(nifty_tickers, start="2020-01-01", progress=False, auto_adjust=False)
 
 df = raw_data.stack(level=1, future_stack=True).reset_index()
 df.rename(columns={'Date': 'DATE', 'Ticker': 'TICKER', 'Open': 'OPEN', 'High': 'HIGH', 'Low': 'LOW', 'Close': 'CLOSE'}, inplace=True)
@@ -87,9 +85,9 @@ df.dropna(subset=['CLOSE'], inplace=True)
 
 # Fetch Index Data for Regime Filter
 print("Downloading Nifty 500 Index data for regime filter...")
-index_data = yf.download("^CRSLDX", start=start_date_str, progress=False, auto_adjust=False)
+index_data = yf.download("^CRSLDX", start="2020-01-01", progress=False, auto_adjust=False)
 if index_data.empty:
-    index_data = yf.download("^NSEI", start=start_date_str, progress=False, auto_adjust=False)
+    index_data = yf.download("^NSEI", start="2020-01-01", progress=False, auto_adjust=False)
 
 if isinstance(index_data.columns, pd.MultiIndex):
     index_data.columns = index_data.columns.droplevel(1)
@@ -136,10 +134,6 @@ df['RS_Score'] = df['RS_Score'].round(0).clip(lower=1, upper=99)
 
 df_bt = df.dropna(subset=['SMA_200', '12M_Return', 'RS_Score', 'ST_15_3']).copy()
 
-# Restrict backtest starting point to exactly 5 years ago
-backtest_start = pd.to_datetime((now_ist - timedelta(days=5*365)).strftime('%Y-%m-%d'))
-df_bt = df_bt[df_bt['DATE'] >= backtest_start]
-
 df_bt = pd.merge(df_bt, index_regime, on='DATE', how='left')
 df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
 df_bt['Prev_Index_ST_DIR'] = df_bt.groupby('TICKER')['Index_ST_DIR'].shift(1).fillna('Up')
@@ -170,10 +164,13 @@ for col in shift_cols:
 
 df_bt['Prev_Buy_Signal'] = df_bt['Prev_Buy_Signal'].fillna(False).astype(bool)
 
-print("Running Backtest Engine (Fixed Position Sizing)...")
+print("Running Backtest Engine (Same-Day MOC Execution)...")
 capital = INITIAL_CAPITAL
 positions = {}
+trades = []
 equity_curve = []
+total_brokerage = 0.0
+
 unique_dates = sorted(df_bt['DATE'].unique())
 
 POSITION_SIZE = INITIAL_CAPITAL / MAX_POSITIONS
@@ -195,28 +192,53 @@ for current_date in unique_dates:
             if today_high == today_low: continue
 
             triggered_sell = False
+            sell_reason = ""
             sl_multiplier = 0.85 if prev_index_st == 'Down' else 0.87
             sl_price = pos['raw_entry_price'] * sl_multiplier
 
-            # Intraday Stops
             if today_open <= sl_price:
                 exit_price = today_open
+                sell_reason = f"SL Gap Down ({int((1-sl_multiplier)*100)}%)"
                 triggered_sell = True
             elif today_low <= sl_price:
                 exit_price = sl_price
+                sell_reason = f"Stoploss {int((1-sl_multiplier)*100)}%"
                 triggered_sell = True
-            
-            # EOD Exits
             elif today_close < today_st:
                 exit_price = today_close
+                sell_reason = "Close < ST(15,3) (MOC)"
                 triggered_sell = True
             elif today_close < today_sma:
                 exit_price = today_close
+                sell_reason = "Close < 200 SMA (MOC)"
                 triggered_sell = True
 
             if triggered_sell:
                 net_exit_price = exit_price * (1 - BROKERAGE_RATE)
+                total_brokerage += exit_price * pos['qty'] * BROKERAGE_RATE
+                ret_pct = (net_exit_price / pos['net_entry_price'] - 1) * 100
+                pnl = (net_exit_price - pos['net_entry_price']) * pos['qty']
                 capital += (net_exit_price * pos['qty'])
+
+                trades.append({
+                    'Ticker': ticker,
+                    'Buy Price': round(pos['net_entry_price'], 2),
+                    'Quantity': pos['qty'],
+                    'Buy Date': pos['entry_date'],
+                    'Sell Price': round(net_exit_price, 2),
+                    'Sell Date': current_date,
+                    'Sell Reason': sell_reason,
+                    'RSI': pos['rsi'],
+                    '3M Return': pos['ret_3m'],
+                    '6M Return': pos['ret_6m'],
+                    '9M Return': pos['ret_9m'],
+                    'RS Score': pos['rs_score'],
+                    'ST Value': pos['st_val'],
+                    'ST Dir': pos['st_dir'],
+                    'Return %': round(ret_pct, 2),
+                    'PnL ₹': round(pnl, 2),
+                    'Holding Days': (current_date - pd.to_datetime(pos['entry_date'])).days
+                })
                 tickers_to_remove.append(ticker)
 
     for t in tickers_to_remove: del positions[t]
@@ -228,7 +250,6 @@ for current_date in unique_dates:
         if row['HIGH'] == row['LOW']: continue
         if len(positions) < MAX_POSITIONS and ticker not in positions:
             
-            # Restored: Fixed position sizing identical to baseline
             invest_amount = POSITION_SIZE if capital >= POSITION_SIZE else capital
             execution_price = row['CLOSE'] 
             net_buy_price = execution_price * (1 + BROKERAGE_RATE)
@@ -236,10 +257,17 @@ for current_date in unique_dates:
             if invest_amount > net_buy_price:
                 qty = int(invest_amount // net_buy_price)
                 cost = qty * net_buy_price
+                total_brokerage += execution_price * qty * BROKERAGE_RATE
                 positions[ticker] = {
-                    'raw_entry_price': execution_price, 'qty': qty, 
-                    'entry_date': current_date, 'index_st': row['Index_ST_DIR'],
-                    'is_new': False 
+                    'raw_entry_price': execution_price, 'net_entry_price': net_buy_price, 'qty': qty, 
+                    'entry_date': current_date, 'index_st': row['Index_ST_DIR'], 'is_new': False,
+                    'rsi': round(row['RSI_14'], 2) if pd.notna(row['RSI_14']) else 0,
+                    'ret_3m': round(row['3M_Return'] * 100, 2) if pd.notna(row['3M_Return']) else 0,
+                    'ret_6m': round(row['6M_Return'] * 100, 2) if pd.notna(row['6M_Return']) else 0,
+                    'ret_9m': round(row['9M_Return'] * 100, 2) if pd.notna(row['9M_Return']) else 0,
+                    'rs_score': row['RS_Score'],
+                    'st_val': round(row['ST_15_3'], 2) if pd.notna(row['ST_15_3']) else 0,
+                    'st_dir': row['ST_DIR']
                 }
                 capital -= cost
 
@@ -292,7 +320,6 @@ for ticker, row in buy_candidates.iterrows():
         if cmp is None:
             cmp = row['CLOSE']
             
-        # Restored: Fixed position sizing for 3 PM execution
         invest_amount = POSITION_SIZE if simulated_capital >= POSITION_SIZE else simulated_capital
         net_buy_price = cmp * (1 + BROKERAGE_RATE)
         qty = int(invest_amount // net_buy_price) if net_buy_price > 0 else 0
@@ -314,7 +341,7 @@ for t, p in positions.items():
     sl_multiplier = 0.85 if p.get('index_st', 'Up') == 'Down' else 0.87
     action = 'BUY' if p.get('is_new', False) else 'HOLD'
     
-    # Restored: The * 100 multiplier so Power BI displays it correctly based on your existing setup
+    # Format untouched for your Power BI Setup
     alloc_list.append({
         'Ticker': t, 
         'Action': action, 
@@ -335,3 +362,21 @@ equity_df['Drawdown'] = equity_df['Equity'] / equity_df['Equity'].cummax() - 1
 equity_df['Daily_Return'] = equity_df['Equity'].pct_change()
 equity_df.to_csv(FILE_2_PORTFOLIO, index=False)
 print(f"✅ Success! Saved {len(equity_df)} days of history to {FILE_2_PORTFOLIO}")
+
+# --- File 3: Trades Dump Export ---
+trades_df = pd.DataFrame(trades)
+dump_file = "SameDay_Execution_Trades.csv"
+
+if not trades_df.empty:
+    cols = [
+        'Ticker', 'Buy Price', 'Quantity', 'Buy Date', 'Sell Price', 'Sell Date', 'Sell Reason',
+        'RSI', '3M Return', '6M Return', '9M Return', 'RS Score', 'ST Value', 'ST Dir',
+        'Return %', 'PnL ₹', 'Holding Days'
+    ]
+    existing_cols = [col for col in cols if col in trades_df.columns]
+    trades_export_df = trades_df[existing_cols]
+
+    trades_export_df.to_csv(dump_file, index=False)
+    print(f"✅ Success! Exported {len(trades_export_df)} trades to: {dump_file}")
+else:
+    print("⚠️ No trades were executed. Dump file not created.")
