@@ -142,6 +142,7 @@ df_bt = df_bt[df_bt['DATE'] >= backtest_start]
 
 df_bt = pd.merge(df_bt, index_regime, on='DATE', how='left')
 df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
+df_bt['Prev_Index_ST_DIR'] = df_bt.groupby('TICKER')['Index_ST_DIR'].shift(1).fillna('Up')
 
 # ==========================================
 # 3. SIGNAL LOGIC & BACKTEST ENGINE
@@ -169,11 +170,13 @@ for col in shift_cols:
 
 df_bt['Prev_Buy_Signal'] = df_bt['Prev_Buy_Signal'].fillna(False).astype(bool)
 
-print("Running Backtest Engine with Dynamic Position Sizing (Compounding)...")
+print("Running Backtest Engine (Fixed Position Sizing)...")
 capital = INITIAL_CAPITAL
 positions = {}
 equity_curve = []
 unique_dates = sorted(df_bt['DATE'].unique())
+
+POSITION_SIZE = INITIAL_CAPITAL / MAX_POSITIONS
 BROKERAGE_RATE = 0.005
 
 for current_date in unique_dates:
@@ -185,27 +188,31 @@ for current_date in unique_dates:
         if ticker in daily_data.index:
             row = daily_data.loc[ticker]
             today_open, today_low, today_high = row['OPEN'], row['LOW'], row['HIGH']
-            prev_close, prev_st, prev_sma, prev_index_st = row['Prev_CLOSE'], row['Prev_ST_15_3'], row['Prev_SMA_200'], row['Prev_Index_ST_DIR']
+            today_close = row['CLOSE']
+            today_st, today_sma = row['ST_15_3'], row['SMA_200']
+            prev_index_st = row['Prev_Index_ST_DIR']
             
             if today_high == today_low: continue
 
             triggered_sell = False
-            if pd.notna(prev_close) and pd.notna(prev_st) and prev_close < prev_st:
+            sl_multiplier = 0.85 if prev_index_st == 'Down' else 0.87
+            sl_price = pos['raw_entry_price'] * sl_multiplier
+
+            # Intraday Stops
+            if today_open <= sl_price:
                 exit_price = today_open
                 triggered_sell = True
-            elif pd.notna(prev_close) and pd.notna(prev_sma) and prev_close < prev_sma:
-                exit_price = today_open
+            elif today_low <= sl_price:
+                exit_price = sl_price
                 triggered_sell = True
             
-            if not triggered_sell:
-                sl_multiplier = 0.85 if prev_index_st == 'Down' else 0.87
-                sl_price = pos['raw_entry_price'] * sl_multiplier
-                if today_open <= sl_price:
-                    exit_price = today_open
-                    triggered_sell = True
-                elif today_low <= sl_price:
-                    exit_price = sl_price
-                    triggered_sell = True
+            # EOD Exits
+            elif today_close < today_st:
+                exit_price = today_close
+                triggered_sell = True
+            elif today_close < today_sma:
+                exit_price = today_close
+                triggered_sell = True
 
             if triggered_sell:
                 net_exit_price = exit_price * (1 - BROKERAGE_RATE)
@@ -215,25 +222,15 @@ for current_date in unique_dates:
     for t in tickers_to_remove: del positions[t]
 
     # Process Buys
-    buy_signals = daily_data[daily_data['Prev_Buy_Signal']].sort_values(by='Prev_RS_Score', ascending=False)
-    
-    # NEW: Calculate current total equity to determine dynamic position size
-    current_portfolio_value = capital
-    for t, p in positions.items():
-        if t in daily_data.index:
-            current_portfolio_value += p['qty'] * daily_data.loc[t, 'CLOSE']
-        else:
-            current_portfolio_value += p['qty'] * p['raw_entry_price']
-            
-    dynamic_position_size = current_portfolio_value / MAX_POSITIONS
+    buy_signals = daily_data[daily_data['Buy_Signal']].sort_values(by='RS_Score', ascending=False)
 
     for ticker, row in buy_signals.iterrows():
         if row['HIGH'] == row['LOW']: continue
         if len(positions) < MAX_POSITIONS and ticker not in positions:
             
-            # Use dynamic position sizing so the strategy reinvests profits
-            invest_amount = dynamic_position_size if capital >= dynamic_position_size else capital
-            execution_price = row['OPEN']
+            # Restored: Fixed position sizing identical to baseline
+            invest_amount = POSITION_SIZE if capital >= POSITION_SIZE else capital
+            execution_price = row['CLOSE'] 
             net_buy_price = execution_price * (1 + BROKERAGE_RATE)
 
             if invest_amount > net_buy_price:
@@ -241,7 +238,7 @@ for current_date in unique_dates:
                 cost = qty * net_buy_price
                 positions[ticker] = {
                     'raw_entry_price': execution_price, 'qty': qty, 
-                    'entry_date': current_date, 'index_st': row['Prev_Index_ST_DIR'],
+                    'entry_date': current_date, 'index_st': row['Index_ST_DIR'],
                     'is_new': False 
                 }
                 capital -= cost
@@ -262,7 +259,6 @@ latest_date = unique_dates[-1]
 last_day_data = df_bt[df_bt['DATE'] == latest_date].set_index('TICKER')
 latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 
-# We need to simulate the available cash for today's 3 PM buys
 simulated_capital = capital
 sells_for_today = []
 
@@ -272,13 +268,11 @@ for ticker, pos in positions.items():
         todays_close, todays_st, todays_sma = row['CLOSE'], row['ST_15_3'], row['SMA_200']
         if pd.notna(todays_close) and ((pd.notna(todays_st) and todays_close < todays_st) or (pd.notna(todays_sma) and todays_close < todays_sma)):
             sells_for_today.append(ticker)
-            # Add cash back to simulated pool for new buys
             simulated_capital += pos['qty'] * todays_close * (1 - BROKERAGE_RATE)
 
 for t in sells_for_today: del positions[t]
 
 buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS_Score', ascending=False)
-dynamic_position_size = latest_equity / MAX_POSITIONS
 
 for ticker, row in buy_candidates.iterrows():
     if len(positions) < MAX_POSITIONS and ticker not in positions:
@@ -295,11 +289,11 @@ for ticker, row in buy_candidates.iterrows():
             except Exception as e:
                 pass
         
-        # Fallback to the latest available close if Angel is unavailable
         if cmp is None:
             cmp = row['CLOSE']
             
-        invest_amount = dynamic_position_size if simulated_capital >= dynamic_position_size else simulated_capital
+        # Restored: Fixed position sizing for 3 PM execution
+        invest_amount = POSITION_SIZE if simulated_capital >= POSITION_SIZE else simulated_capital
         net_buy_price = cmp * (1 + BROKERAGE_RATE)
         qty = int(invest_amount // net_buy_price) if net_buy_price > 0 else 0
 
@@ -320,6 +314,7 @@ for t, p in positions.items():
     sl_multiplier = 0.85 if p.get('index_st', 'Up') == 'Down' else 0.87
     action = 'BUY' if p.get('is_new', False) else 'HOLD'
     
+    # Restored: The * 100 multiplier so Power BI displays it correctly based on your existing setup
     alloc_list.append({
         'Ticker': t, 
         'Action': action, 
