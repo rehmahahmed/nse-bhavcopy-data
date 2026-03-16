@@ -74,7 +74,7 @@ except FileNotFoundError:
     print(f"Warning: {TICKER_FILE} not found. Using a fallback list.")
     nifty_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS"]
 
-# Restored: Hardcoded to 2020-01-01 to match baseline 376k results
+# Downloads start in 2020 so 200 SMA and 12M Return have time to calculate
 print(f"Downloading historical data for {len(nifty_tickers)} tickers...")
 raw_data = yf.download(nifty_tickers, start="2020-01-01", progress=False, auto_adjust=False)
 
@@ -163,6 +163,10 @@ for col in shift_cols:
     df_bt[f'Prev_{col}'] = df_bt.groupby('TICKER')[col].shift(1)
 
 df_bt['Prev_Buy_Signal'] = df_bt['Prev_Buy_Signal'].fillna(False).astype(bool)
+
+# ---> THE FIX: Filter execution strictly to 2021 onwards so the baseline starts cleanly <---
+print("Filtering data to start portfolio execution strictly from 2021-01-01...")
+df_bt = df_bt[df_bt['DATE'] >= '2021-01-01']
 
 print("Running Backtest Engine (Same-Day MOC Execution)...")
 capital = INITIAL_CAPITAL
