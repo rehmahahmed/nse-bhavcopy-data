@@ -164,7 +164,7 @@ for col in shift_cols:
 
 df_bt['Prev_Buy_Signal'] = df_bt['Prev_Buy_Signal'].fillna(False).astype(bool)
 
-# ---> THE FIX: Filter execution strictly to 2021 onwards so the baseline starts cleanly <---
+# ---> Filtering execution strictly to 2021 onwards so the baseline starts cleanly
 print("Filtering data to start portfolio execution strictly from 2021-01-01...")
 df_bt = df_bt[df_bt['DATE'] >= '2021-01-01']
 
@@ -285,7 +285,7 @@ for current_date in unique_dates:
     equity_curve.append({'Date': current_date, 'Equity': daily_portfolio_value})
 
 # ==========================================
-# 4. PREPARE TODAY'S 3:00 PM TARGETS & EXPORT
+# 4. PREPARE TODAY'S TARGETS (TIME-AWARE EXECUTION)
 # ==========================================
 latest_date = unique_dates[-1]
 last_day_data = df_bt[df_bt['DATE'] == latest_date].set_index('TICKER')
@@ -293,15 +293,30 @@ latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 
 simulated_capital = capital
 sells_for_today = []
+sell_rows_for_export = [] # <-- NEW: Storing the sell data before deletion
 
 for ticker, pos in positions.items():
     if ticker in last_day_data.index:
         row = last_day_data.loc[ticker]
         todays_close, todays_st, todays_sma = row['CLOSE'], row['ST_15_3'], row['SMA_200']
+        
         if pd.notna(todays_close) and ((pd.notna(todays_st) and todays_close < todays_st) or (pd.notna(todays_sma) and todays_close < todays_sma)):
             sells_for_today.append(ticker)
             simulated_capital += pos['qty'] * todays_close * (1 - BROKERAGE_RATE)
+            
+            # Save the sell row data so it can be added to the Live CSV
+            sl_multiplier = 0.85 if pos.get('index_st', 'Up') == 'Down' else 0.87
+            sell_rows_for_export.append({
+                'Ticker': ticker,
+                'Action': 'SELL',
+                'Entry_Price': round(pos['raw_entry_price'], 2), 
+                'Quantity': pos['qty'],
+                'Stoploss': round(pos['raw_entry_price'] * sl_multiplier, 2),
+                'Allocation_%': round(((pos['qty'] * pos['raw_entry_price']) / latest_equity) * 100, 2) if latest_equity > 0 else 0,
+                'Entry_Date': pos['entry_date']
+            })
 
+# Remove sold stocks from the active portfolio list
 for t in sells_for_today: del positions[t]
 
 buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS_Score', ascending=False)
@@ -341,11 +356,11 @@ for ticker, row in buy_candidates.iterrows():
 # --- File 1: Allocations Output ---
 alloc_list = []
 
+# 1. Build normal BUY / HOLD rows
 for t, p in positions.items():
     sl_multiplier = 0.85 if p.get('index_st', 'Up') == 'Down' else 0.87
     action = 'BUY' if p.get('is_new', False) else 'HOLD'
     
-    # Format untouched for your Power BI Setup
     alloc_list.append({
         'Ticker': t, 
         'Action': action, 
@@ -356,9 +371,20 @@ for t, p in positions.items():
         'Entry_Date': p['entry_date']
     })
 
+# 2. Time-Aware Logic: Check if Market is Open (before 3:30 PM)
+is_market_open = now_ist.hour < 15 or (now_ist.hour == 15 and now_ist.minute <= 30)
+
+if is_market_open:
+    # Append the SELL rows so they appear on the 3:00 PM Live Dashboard
+    alloc_list.extend(sell_rows_for_export)
+    print(f"Market is Open (Live Run). Included {len(sell_rows_for_export)} SELL target(s) for execution.")
+else:
+    # Do nothing; the 4:00 PM run will naturally exclude the deleted SELL rows
+    print("Market is Closed (Post-Market Run). Removed SELL targets to reflect final portfolio state.")
+
 alloc_df = pd.DataFrame(alloc_list)
 alloc_df.to_csv(FILE_1_ALLOCATIONS, index=False)
-print(f"✅ Success! Generated {len(alloc_df)} targets in {FILE_1_ALLOCATIONS}")
+print(f"✅ Success! Generated targets in {FILE_1_ALLOCATIONS}")
 
 # --- File 2: Historical Portfolio Value Output ---
 equity_df = pd.DataFrame(equity_curve)
