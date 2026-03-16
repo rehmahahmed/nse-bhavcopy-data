@@ -154,13 +154,13 @@ df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=Tr
 DAYS_1D, DAYS_1W, DAYS_1M = 1, 5, 21
 DAYS_3M, DAYS_6M, DAYS_9M, DAYS_12M = 63, 126, 189, 252
 
-# --- NEW: Calculate Strategy Indicators (SMA, EMA, RSI) ---
+# --- Calculate Strategy Indicators (SMA, EMA, RSI) ---
 df_combined['SMA_50'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.sma(x, length=50))
 df_combined['SMA_200'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.sma(x, length=200))
 df_combined['EMA_9'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.ema(x, length=9))
 df_combined['RSI_14'] = df_combined.groupby('Symbol')['Close'].transform(lambda x: ta.rsi(x, length=14))
 
-# --- NEW: Calculate SuperTrend for Stocks ---
+# --- Calculate SuperTrend for Stocks ---
 print("Calculating SuperTrend for all stocks...")
 st_list = []
 for sym, group in df_combined.groupby('Symbol'):
@@ -264,7 +264,38 @@ except Exception as e:
 
 print("Extracting the latest rows for the dashboard...")
 
+# Get the latest row for each symbol
 df_latest = df_combined.groupby('Symbol').tail(1).copy()
+
+# --- VECTORIZED SIGNAL LOGIC (Applied only to the latest day) ---
+print("Calculating Buy/Sell/Hold signals...")
+is_circuit_day = df_latest['High'] == df_latest['Low']
+
+# Handling NaNs: if SMA or ST is missing, handle them properly
+price_above_sma200 = (df_latest['Close'] > df_latest['SMA_200']) & df_latest['SMA_200'].notna()
+price_above_supertrend = (df_latest['Close'] > df_latest['ST_15_3']) | df_latest['ST_15_3'].isna()
+
+sell_triggered = (~price_above_sma200) | (~price_above_supertrend)
+
+buy_triggered = (
+    (~is_circuit_day) &
+    (df_latest['RSI_14'] > 55) & 
+    (df_latest['1D Return %'] > -5.0) & 
+    ((df_latest['3M Return %'] > 20.0) | (df_latest['6M Return %'] > 30.0) | (df_latest['1M Return %'] > 10.0)) &
+    (df_latest['SMA_50'] > df_latest['SMA_200']) & 
+    (df_latest['RS'] > 80) & 
+    price_above_sma200 & 
+    price_above_supertrend &
+    (abs((df_latest['Close'] / df_latest['EMA_9']) - 1) <= 0.05)
+)
+
+# Apply the signals to a new column using np.select
+df_latest['Signal'] = np.select(
+    [sell_triggered, buy_triggered], 
+    ['SELL', 'BUY'], 
+    default='HOLD'
+)
+# ----------------------------------------------------------------
 
 if 'Industry' in df_latest.columns:
     df_latest = df_latest.drop(columns=['Industry'])
@@ -275,7 +306,7 @@ update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 df_final['Last_Updated'] = update_time_str
 df_final['Chart_Link'] = "https://in.tradingview.com/chart/?symbol=NSE:" + df_final['Symbol']
 
-# --- NEW: Map exactly to calculate_allocations.py requirements ---
+# Map exactly to calculate_allocations.py requirements
 df_final['Prev_Close'] = df_final['Close']
 df_final['1M_Return'] = df_final['ret_1m']
 df_final['3M_Return'] = df_final['ret_3m']
@@ -283,9 +314,9 @@ df_final['6M_Return'] = df_final['ret_6m']
 df_final['RS_Score'] = df_final['RS']
 df_final['Index_ST_DIR'] = index_st_dir_latest
 
-# Exporting all the columns required for both the PowerBI dashboard and the allocation script
+# Exporting all columns, now including 'Signal'
 final_columns = [
-    'Symbol', 'Industry', '1D Return %', '1W Return %', '1M Return %', 
+    'Symbol', 'Industry', 'Signal', '1D Return %', '1W Return %', '1M Return %', 
     '3M Return %', '6M Return %', 'Above_SMA_200', 'Weighted Sharpe', 
     'weighted_avg', 'RS', 'Last_Updated', 'Chart_Link',
     # --- Allocation Script Needs ---
