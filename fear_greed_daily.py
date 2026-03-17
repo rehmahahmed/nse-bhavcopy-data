@@ -17,10 +17,16 @@ end_date = datetime.now()
 if os.path.exists(CSV_FILENAME):
     print(f"Loading existing database: {CSV_FILENAME}")
     df_history = pd.read_csv(CSV_FILENAME)
+    
+    # NEW: Force all column names to lowercase to fix the 'Date' vs 'date' issue
+    df_history.columns = df_history.columns.str.lower()
+    
+    # Safety catch: If the index was saved without a name, pandas calls it 'unnamed: 0'
+    if 'date' not in df_history.columns and 'unnamed: 0' in df_history.columns:
+        df_history = df_history.rename(columns={'unnamed: 0': 'date'})
+        
     df_history['date'] = pd.to_datetime(df_history['date'])
     last_date = df_history['date'].max()
-    # Look back 2 extra days to ensure no news was missed
-    start_date = last_date - timedelta(days=2) 
 else:
     print("No history found. Initializing with the last 30 days of news...")
     df_history = pd.DataFrame()
