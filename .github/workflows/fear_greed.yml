@@ -1,0 +1,41 @@
+name: Daily Fear & Greed Index Updater
+
+on:
+  schedule:
+    # Runs at 10:30 AM UTC every day (4:00 PM IST)
+    - cron: '30 10 * * *'
+  workflow_dispatch: # Allows you to click a button to run it manually
+
+permissions:
+  contents: write
+
+jobs:
+  update-sentiment:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Speeds up the installation of heavy AI libraries
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas yfinance gnews transformers torch
+          
+      - name: Run Sentiment Script
+        run: python fear_greed_daily.py
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add fear_greed_master.csv
+          # Only commit if there are changes to avoid workflow errors
+          git diff --quiet && git diff --staged --quiet || git commit -m "Automated update: FinBERT Fear & Greed Index"
+          git push
