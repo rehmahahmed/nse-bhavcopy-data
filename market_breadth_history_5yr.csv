@@ -1,5 +1,4 @@
 Date,Stocks_Above_200_SMA,Financial Services,Diversified,Healthcare,Chemicals,Capital Goods,Fast Moving Consumer Goods,Consumer Services,Forest Materials,Construction Materials,Power,Metals & Mining,Services,Oil Gas & Consumable Fuels,Construction,Information Technology,Consumer Durables,Textiles,Realty,Automobile and Auto Components,Telecommunication,Utilities,Media Entertainment & Publication
-2021-03-18,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 2021-03-19,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 2021-03-22,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 2021-03-23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -79,7 +78,7 @@ Date,Stocks_Above_200_SMA,Financial Services,Diversified,Healthcare,Chemicals,Ca
 2021-07-12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 2021-07-13,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 2021-07-14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-2021-07-15,114,20,1,4,7,17,7,5,0,1,1,5,4,4,5,8,10,3,1,9,0,0,2
+2021-07-15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 2021-07-16,114,20,1,4,7,17,7,5,0,1,1,5,4,4,5,8,10,3,1,9,0,0,2
 2021-07-19,114,20,1,4,7,17,7,5,0,1,1,5,4,4,5,8,10,3,1,9,0,0,2
 2021-07-20,113,20,1,4,7,17,7,5,0,1,1,5,4,4,5,7,10,3,1,9,0,0,2
@@ -1239,3 +1238,4 @@ Date,Stocks_Above_200_SMA,Financial Services,Diversified,Healthcare,Chemicals,Ca
 2026-03-13,146,30,1,19,9,29,4,1,0,0,8,12,2,7,1,1,5,2,0,12,3,0,0
 2026-03-16,141,31,1,19,7,28,4,0,0,0,7,12,2,5,1,1,4,2,0,14,3,0,0
 2026-03-17,149,29,1,19,7,32,5,1,0,0,7,13,2,6,1,1,4,2,0,16,3,0,0
+2026-03-18,173,36,1,20,7,39,6,2,0,0,8,13,3,6,1,1,4,3,0,19,3,0,1
