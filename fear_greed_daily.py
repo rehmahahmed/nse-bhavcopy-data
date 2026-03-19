@@ -99,7 +99,6 @@ price_df.index = pd.to_datetime(price_df.index).normalize()
 if price_df.index.tz is not None:
     price_df.index = price_df.index.tz_localize(None)
 
-# THE FIX: Recalculate daily_return and target_direction to match your screenshot perfectly
 price_df["daily_return"] = price_df["Close"].pct_change()
 price_df["target_direction"] = (price_df["daily_return"].shift(-1) > 0).astype(int)
 
@@ -109,9 +108,11 @@ master_df["sentiment_score"] = master_df["sentiment_score"].ffill().fillna(0)
 # ==========================================
 # 5. CALCULATE FEAR & GREED INDEX
 # ==========================================
-master_df["smooth_sentiment"] = master_df["sentiment_score"].rolling(window=3, min_periods=1).mean()
-master_df["fear_greed_index"] = ((master_df["smooth_sentiment"] - (-1)) / 2) * 100
-master_df["fear_greed_index"] = master_df["fear_greed_index"].round(0)
+# Updated Logic: 15-day rolling average, minimum 5 periods
+master_df["smooth_sentiment"] = master_df["sentiment_score"].rolling(window=15, min_periods=5).mean()
+
+# Kept column name as 'fear_greed_index' so PowerBI doesn't break, applying the new .round(1) logic
+master_df["fear_greed_index"] = (((master_df["smooth_sentiment"] - (-1)) / 2) * 100).round(1)
 
 # Reset index and force capital "Date" to keep Power BI happy
 master_df.reset_index(inplace=True)
