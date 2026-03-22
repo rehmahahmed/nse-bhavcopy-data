@@ -396,58 +396,52 @@ print(f"✅ Success! Saved {len(equity_df)} days of history to {FILE_2_PORTFOLIO
 # --- File 3: Trades Dump Export ---
 dump_file = "strategy_trade_history.csv"
 
+transaction_ledger = []
+
+# 1. Add all CLOSED trades (Both BOUGHT and SOLD rows)
 if trades:
-    transaction_ledger = []
-    
     for t in trades:
-        # 1. Create the BOUGHT row
+        # The Entry Row for a closed trade
         transaction_ledger.append({
-            'Ticker': t['Ticker'],
-            'Action': 'BOUGHT',
-            'Date': t['Buy Date'],
-            'Price': t['Buy Price'],
-            'Quantity': t['Quantity'],
-            'Reason': 'Entry',
-            'RSI': t['RSI'],
-            '3M Return': t['3M Return'],
-            '6M Return': t['6M Return'],
-            '9M Return': t['9M Return'],
-            'RS Score': t['RS Score'],
-            'ST Value': t['ST Value'],
-            'ST Dir': t['ST Dir'],
-            'Return %': None,
-            'PnL ₹': None,
-            'Holding Days': None
+            'Ticker': t['Ticker'], 'Action': 'BOUGHT', 'Date': t['Buy Date'],
+            'Price': t['Buy Price'], 'Quantity': t['Quantity'], 'Reason': 'Entry',
+            'RSI': t['RSI'], '3M Return': t['3M Return'], '6M Return': t['6M Return'],
+            '9M Return': t['9M Return'], 'RS Score': t['RS Score'], 'ST Value': t['ST Value'],
+            'ST Dir': t['ST Dir'], 'Return %': None, 'PnL ₹': None, 'Holding Days': None
         })
-        
-        # 2. Create the SOLD row
+        # The Exit Row for a closed trade
         transaction_ledger.append({
-            'Ticker': t['Ticker'],
-            'Action': 'SOLD',
-            'Date': t['Sell Date'],
-            'Price': t['Sell Price'],
-            'Quantity': t['Quantity'],
-            'Reason': t['Sell Reason'],
-            'RSI': t['RSI'],
-            '3M Return': t['3M Return'],
-            '6M Return': t['6M Return'],
-            '9M Return': t['9M Return'],
-            'RS Score': t['RS Score'],
-            'ST Value': t['ST Value'],
-            'ST Dir': t['ST Dir'],
-            'Return %': t['Return %'],
-            'PnL ₹': t['PnL ₹'],
-            'Holding Days': t['Holding Days']
+            'Ticker': t['Ticker'], 'Action': 'SOLD', 'Date': t['Sell Date'],
+            'Price': t['Sell Price'], 'Quantity': t['Quantity'], 'Reason': t['Sell Reason'],
+            'RSI': t['RSI'], '3M Return': t['3M Return'], '6M Return': t['6M Return'],
+            '9M Return': t['9M Return'], 'RS Score': t['RS Score'], 'ST Value': t['ST Value'],
+            'ST Dir': t['ST Dir'], 'Return %': t['Return %'], 'PnL ₹': t['PnL ₹'], 'Holding Days': t['Holding Days']
         })
 
+# 2. Add all OPEN trades (BOUGHT rows only)
+if positions:
+    for ticker, pos in positions.items():
+        # Ensure we have the proper date format
+        entry_date = pos['entry_date'].date() if hasattr(pos['entry_date'], 'date') else pos['entry_date']
+        
+        transaction_ledger.append({
+            'Ticker': ticker, 'Action': 'BOUGHT', 'Date': entry_date,
+            'Price': round(pos['net_entry_price'], 2) if 'net_entry_price' in pos else round(pos['raw_entry_price'], 2),
+            'Quantity': pos['qty'], 'Reason': 'Active Open Position',
+            'RSI': pos.get('rsi', None), '3M Return': pos.get('ret_3m', None), 
+            '6M Return': pos.get('ret_6m', None), '9M Return': pos.get('ret_9m', None), 
+            'RS Score': pos.get('rs_score', None), 'ST Value': pos.get('st_val', None),
+            'ST Dir': pos.get('st_dir', None), 'Return %': None, 'PnL ₹': None, 'Holding Days': None
+        })
+
+# 3. Create DataFrame and Export
+if transaction_ledger:
     trades_export_df = pd.DataFrame(transaction_ledger)
     
     # Sort by Date descending so the newest transactions are always at the top
     trades_export_df.sort_values(by='Date', ascending=False, inplace=True)
     
-    # Save to CSV
     trades_export_df.to_csv(dump_file, index=False)
-    print(f"✅ Success! Exported {len(trades_export_df)} individual transactions to: {dump_file}")
-
+    print(f"✅ Success! Exported {len(trades_export_df)} individual transactions (including open positions) to: {dump_file}")
 else:
-    print("⚠️ No trades were executed. Dump file not created.")
+    print("⚠️ No trades or open positions exist. Dump file not created.")
