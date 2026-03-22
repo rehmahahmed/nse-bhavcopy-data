@@ -404,17 +404,12 @@ if not trades_df.empty:
         'Return %', 'PnL ₹', 'Holding Days'
     ]
     existing_cols = [col for col in cols if col in trades_df.columns]
-    trades_export_df = trades_df[existing_cols].copy() # .copy() prevents pandas warnings
+    trades_export_df = trades_df[existing_cols].copy()
     
-    # THE FIX: Sort by 'Sell Date' descending so the newest trades are always row 1
+    # Sort by 'Sell Date' descending so the newest trades are always row 1
     trades_export_df.sort_values(by='Sell Date', ascending=False, inplace=True)
-
     trades_export_df.to_csv(dump_file, index=False)
-    print(f"✅ Success! Exported {len(trades_export_df)} trades to: {dump_file}")
-else:
-    print("⚠️ No trades were executed. Dump file not created.")
-
-    trades_export_df.to_csv(dump_file, index=False)
+    
     print(f"✅ Success! Exported {len(trades_export_df)} trades to: {dump_file}")
 else:
     print("⚠️ No trades were executed. Dump file not created.")
