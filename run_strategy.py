@@ -438,8 +438,14 @@ if positions:
 if transaction_ledger:
     trades_export_df = pd.DataFrame(transaction_ledger)
     
+    # THE FIX: Force the entire Date column into standard Pandas datetime format before sorting
+    trades_export_df['Date'] = pd.to_datetime(trades_export_df['Date'])
+    
     # Sort by Date descending so the newest transactions are always at the top
     trades_export_df.sort_values(by='Date', ascending=False, inplace=True)
+    
+    # Optional: Convert them all back to clean string dates (YYYY-MM-DD) for the CSV output
+    trades_export_df['Date'] = trades_export_df['Date'].dt.strftime('%Y-%m-%d')
     
     trades_export_df.to_csv(dump_file, index=False)
     print(f"✅ Success! Exported {len(trades_export_df)} individual transactions (including open positions) to: {dump_file}")
