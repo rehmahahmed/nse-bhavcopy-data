@@ -394,8 +394,8 @@ equity_df.to_csv(FILE_2_PORTFOLIO, index=False)
 print(f"✅ Success! Saved {len(equity_df)} days of history to {FILE_2_PORTFOLIO}")
 
 # --- File 3: Trades Dump Export ---
+dump_file = "strategy_trade_history.csv"
 trades_df = pd.DataFrame(trades)
-dump_file = "SameDay_Execution_Trades.csv"
 
 if not trades_df.empty:
     cols = [
@@ -404,7 +404,15 @@ if not trades_df.empty:
         'Return %', 'PnL ₹', 'Holding Days'
     ]
     existing_cols = [col for col in cols if col in trades_df.columns]
-    trades_export_df = trades_df[existing_cols]
+    trades_export_df = trades_df[existing_cols].copy() # .copy() prevents pandas warnings
+    
+    # THE FIX: Sort by 'Sell Date' descending so the newest trades are always row 1
+    trades_export_df.sort_values(by='Sell Date', ascending=False, inplace=True)
+
+    trades_export_df.to_csv(dump_file, index=False)
+    print(f"✅ Success! Exported {len(trades_export_df)} trades to: {dump_file}")
+else:
+    print("⚠️ No trades were executed. Dump file not created.")
 
     trades_export_df.to_csv(dump_file, index=False)
     print(f"✅ Success! Exported {len(trades_export_df)} trades to: {dump_file}")
