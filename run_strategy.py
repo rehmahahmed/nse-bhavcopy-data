@@ -433,18 +433,18 @@ if positions:
             'RS Score': pos.get('rs_score', None), 'ST Value': pos.get('st_val', None),
             'ST Dir': pos.get('st_dir', None), 'Return %': None, 'PnL ₹': None, 'Holding Days': None
         })
-
 # 3. Create DataFrame and Export
 if transaction_ledger:
     trades_export_df = pd.DataFrame(transaction_ledger)
     
-    # THE FIX: Force the entire Date column into standard Pandas datetime format before sorting
+    # Force the entire Date column into standard Pandas datetime format before sorting
     trades_export_df['Date'] = pd.to_datetime(trades_export_df['Date'])
     
-    # Sort by Date descending so the newest transactions are always at the top
-    trades_export_df.sort_values(by='Date', ascending=False, inplace=True)
+    # THE FIX: Sort by Date (descending) AND Action (descending)
+    # Since 'S' comes after 'B', descending alphabetical order forces SOLD above BOUGHT!
+    trades_export_df.sort_values(by=['Date', 'Action'], ascending=[False, False], inplace=True)
     
-    # Optional: Convert them all back to clean string dates (YYYY-MM-DD) for the CSV output
+    # Convert them all back to clean string dates (YYYY-MM-DD) for the CSV output
     trades_export_df['Date'] = trades_export_df['Date'].dt.strftime('%Y-%m-%d')
     
     trades_export_df.to_csv(dump_file, index=False)
