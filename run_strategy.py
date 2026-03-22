@@ -395,21 +395,59 @@ print(f"✅ Success! Saved {len(equity_df)} days of history to {FILE_2_PORTFOLIO
 
 # --- File 3: Trades Dump Export ---
 dump_file = "strategy_trade_history.csv"
-trades_df = pd.DataFrame(trades)
 
-if not trades_df.empty:
-    cols = [
-        'Ticker', 'Buy Price', 'Quantity', 'Buy Date', 'Sell Price', 'Sell Date', 'Sell Reason',
-        'RSI', '3M Return', '6M Return', '9M Return', 'RS Score', 'ST Value', 'ST Dir',
-        'Return %', 'PnL ₹', 'Holding Days'
-    ]
-    existing_cols = [col for col in cols if col in trades_df.columns]
-    trades_export_df = trades_df[existing_cols].copy()
+if trades:
+    transaction_ledger = []
     
-    # Sort by 'Sell Date' descending so the newest trades are always row 1
-    trades_export_df.sort_values(by='Sell Date', ascending=False, inplace=True)
+    for t in trades:
+        # 1. Create the BUY row
+        transaction_ledger.append({
+            'Ticker': t['Ticker'],
+            'Action': 'BUY',
+            'Date': t['Buy Date'],
+            'Price': t['Buy Price'],
+            'Quantity': t['Quantity'],
+            'Reason': 'Entry',
+            'RSI': t['RSI'],
+            '3M Return': t['3M Return'],
+            '6M Return': t['6M Return'],
+            '9M Return': t['9M Return'],
+            'RS Score': t['RS Score'],
+            'ST Value': t['ST Value'],
+            'ST Dir': t['ST Dir'],
+            'Return %': None,  # Not applicable on buy
+            'PnL ₹': None,     # Not applicable on buy
+            'Holding Days': None
+        })
+        
+        # 2. Create the SELL row
+        transaction_ledger.append({
+            'Ticker': t['Ticker'],
+            'Action': 'SELL',
+            'Date': t['Sell Date'],
+            'Price': t['Sell Price'],
+            'Quantity': t['Quantity'],
+            'Reason': t['Sell Reason'],
+            'RSI': t['RSI'],       # Keeping entry indicators for reference
+            '3M Return': t['3M Return'],
+            '6M Return': t['6M Return'],
+            '9M Return': t['9M Return'],
+            'RS Score': t['RS Score'],
+            'ST Value': t['ST Value'],
+            'ST Dir': t['ST Dir'],
+            'Return %': t['Return %'],
+            'PnL ₹': t['PnL ₹'],
+            'Holding Days': t['Holding Days']
+        })
+
+    trades_export_df = pd.DataFrame(transaction_ledger)
+    
+    # Sort by Date descending so the newest transactions (Buys or Sells) are always at the top
+    trades_export_df.sort_values(by='Date', ascending=False, inplace=True)
+    
+    # Save to CSV
     trades_export_df.to_csv(dump_file, index=False)
-    
-    print(f"✅ Success! Exported {len(trades_export_df)} trades to: {dump_file}")
+    print(f"✅ Success! Exported {len(trades_export_df)} individual transactions to: {dump_file}")
+
 else:
     print("⚠️ No trades were executed. Dump file not created.")
