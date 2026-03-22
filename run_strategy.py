@@ -400,10 +400,10 @@ if trades:
     transaction_ledger = []
     
     for t in trades:
-        # 1. Create the BUY row
+        # 1. Create the BOUGHT row
         transaction_ledger.append({
             'Ticker': t['Ticker'],
-            'Action': 'BUY',
+            'Action': 'BOUGHT',
             'Date': t['Buy Date'],
             'Price': t['Buy Price'],
             'Quantity': t['Quantity'],
@@ -415,20 +415,20 @@ if trades:
             'RS Score': t['RS Score'],
             'ST Value': t['ST Value'],
             'ST Dir': t['ST Dir'],
-            'Return %': None,  # Not applicable on buy
-            'PnL ₹': None,     # Not applicable on buy
+            'Return %': None,
+            'PnL ₹': None,
             'Holding Days': None
         })
         
-        # 2. Create the SELL row
+        # 2. Create the SOLD row
         transaction_ledger.append({
             'Ticker': t['Ticker'],
-            'Action': 'SELL',
+            'Action': 'SOLD',
             'Date': t['Sell Date'],
             'Price': t['Sell Price'],
             'Quantity': t['Quantity'],
             'Reason': t['Sell Reason'],
-            'RSI': t['RSI'],       # Keeping entry indicators for reference
+            'RSI': t['RSI'],
             '3M Return': t['3M Return'],
             '6M Return': t['6M Return'],
             '9M Return': t['9M Return'],
@@ -442,7 +442,7 @@ if trades:
 
     trades_export_df = pd.DataFrame(transaction_ledger)
     
-    # Sort by Date descending so the newest transactions (Buys or Sells) are always at the top
+    # Sort by Date descending so the newest transactions are always at the top
     trades_export_df.sort_values(by='Date', ascending=False, inplace=True)
     
     # Save to CSV
