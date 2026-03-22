@@ -447,8 +447,11 @@ if transaction_ledger:
     
     # Convert them all back to clean string dates (YYYY-MM-DD) for the CSV output
     trades_export_df['Date'] = trades_export_df['Date'].dt.strftime('%Y-%m-%d')
+    # NEW: Add a strict ranking/index column starting from 1
+    trades_export_df.insert(0, 'Sort_Order', range(1, 1 + len(trades_export_df)))
     
     trades_export_df.to_csv(dump_file, index=False)
+    
     print(f"✅ Success! Exported {len(trades_export_df)} individual transactions (including open positions) to: {dump_file}")
 else:
     print("⚠️ No trades or open positions exist. Dump file not created.")
