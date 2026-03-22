@@ -443,7 +443,7 @@ if transaction_ledger:
     # THE FIX: Sort by Date (descending) AND Action (descending)
     # Since 'S' comes after 'B', descending alphabetical order forces SOLD above BOUGHT!
     # Sort by Date (descending) -> Action (descending: S before B) -> Ticker (ascending: A to Z)
-    trades_export_df.sort_values(by=['Date', 'Action', 'Ticker'], ascending=[False, False, True], inplace=True)
+    trades_export_df.sort_values(by=['Date', 'Action', 'Ticker'], ascending=[False, True, True], inplace=True)
     
     # Convert them all back to clean string dates (YYYY-MM-DD) for the CSV output
     trades_export_df['Date'] = trades_export_df['Date'].dt.strftime('%Y-%m-%d')
