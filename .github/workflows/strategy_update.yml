@@ -39,8 +39,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # THE FIX: Added strategy_trade_history.csv to the list of files to save
-          git add daily_allocations.csv historical_portfolio_value.csv strategy_trade_history.csv || true
+          # THE FIX: Added yearly_returns.csv to the list of files to save
+          git add daily_allocations.csv historical_portfolio_value.csv strategy_trade_history.csv yearly_returns.csv || true
           
           if ! git diff --staged --quiet; then
             git commit -m "Automated Strategy Update (2:00 PM Execution)"
