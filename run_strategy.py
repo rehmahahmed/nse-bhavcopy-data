@@ -28,7 +28,7 @@ now_ist = datetime.now(ist)
 print(f"Running Standalone EOD Strategy. Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ==========================================
-# 0. ANGEL ONE LOGIN (For 3 PM Live CMP)
+# 0. ANGEL ONE LOGIN
 # ==========================================
 API_KEY = os.environ.get("ANGEL_API_KEY")
 CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
@@ -39,7 +39,7 @@ smartApi = None
 token_map = {}
 
 if API_KEY and CLIENT_CODE:
-    print("Connecting to Angel One API to fetch Live 3 PM CMPs...")
+    print("Connecting to Angel One API...")
     try:
         smartApi = SmartConnect(api_key=API_KEY)
         totp = pyotp.TOTP(TOTP_SECRET).now()
@@ -54,11 +54,16 @@ if API_KEY and CLIENT_CODE:
             print("Successfully authenticated with Angel One.")
         else:
             print("Angel Login Failed:", login_data['message'])
+            exit()
     except Exception as e:
         print(f"Error during Angel One authentication: {e}")
+        exit()
+else:
+    print("Missing Angel credentials. Exiting.")
+    exit()
 
 # ==========================================
-# 1. LOAD TICKERS & FETCH YFINANCE DATA
+# 1. LOAD TICKERS & FETCH ANGEL ONE HISTORICAL DATA
 # ==========================================
 try:
     ticker_df = pd.read_csv(TICKER_FILE)
@@ -68,22 +73,63 @@ try:
         raw_symbols = ticker_df['Ticker'].tolist()
     else:
         raw_symbols = ticker_df.iloc[:, 0].tolist()
-        
-    nifty_tickers = [str(sym).strip() + '.NS' for sym in raw_symbols if pd.notna(sym)]
 except FileNotFoundError:
     print(f"Warning: {TICKER_FILE} not found. Using a fallback list.")
-    nifty_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS"]
+    raw_symbols = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBI"]
 
-# Downloads start in 2020 so 200 SMA and 12M Return have time to calculate
-print(f"Downloading historical data for {len(nifty_tickers)} tickers...")
-raw_data = yf.download(nifty_tickers, start="2020-01-01", progress=False, auto_adjust=False)
+end_date = datetime.now()
+start_date = end_date - timedelta(days=5*365)
+FROM_DATE = start_date.strftime("%Y-%m-%d 09:15")
+TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
 
-df = raw_data.stack(level=1, future_stack=True).reset_index()
-df.rename(columns={'Date': 'DATE', 'Ticker': 'TICKER', 'Open': 'OPEN', 'High': 'HIGH', 'Low': 'LOW', 'Close': 'CLOSE'}, inplace=True)
+new_data_rows = []
+print(f"Downloading 5-year historical data from Angel One for {len(raw_symbols)} tickers...")
+
+for i, symbol in enumerate(raw_symbols):
+    symbol_str = str(symbol).strip()
+    if symbol_str not in token_map: continue
+
+    historicParam = {
+        "exchange": "NSE", "symboltoken": token_map[symbol_str],
+        "interval": "ONE_DAY", "fromdate": FROM_DATE, "todate": TO_DATE
+    }
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            hist_data = smartApi.getCandleData(historicParam)
+            
+            if hist_data and hist_data.get('status') and hist_data.get('data'):
+                for row in hist_data['data']:
+                    new_data_rows.append({
+                        'DATE': row[0][:10],
+                        'TICKER': symbol_str + '.NS',  # Appending .NS to match portfolio engine logic
+                        'OPEN': row[1],
+                        'HIGH': row[2],
+                        'LOW': row[3],
+                        'CLOSE': row[4],
+                        'VOLUME': row[5]
+                    })
+                break 
+            
+            elif hist_data and hist_data.get('errorcode') == 'AB1004':
+                time.sleep(3)
+            else:
+                time.sleep(2)
+                
+        except Exception:
+            time.sleep(2)
+            
+    time.sleep(0.6) 
+
+    if (i + 1) % 50 == 0:
+        print(f"Processed {i + 1} / {len(raw_symbols)} stocks...")
+
+df = pd.DataFrame(new_data_rows)
 df['DATE'] = pd.to_datetime(df['DATE']).dt.tz_localize(None)
 df.dropna(subset=['CLOSE'], inplace=True)
 
-# Fetch Index Data for Regime Filter
+# Fetch Index Data for Regime Filter (Kept on YFinance to align with Script 1)
 print("Downloading Nifty 500 Index data for regime filter...")
 index_data = yf.download("^CRSLDX", start="2020-01-01", progress=False, auto_adjust=False)
 if index_data.empty:
@@ -433,6 +479,7 @@ if positions:
             'RS Score': pos.get('rs_score', None), 'ST Value': pos.get('st_val', None),
             'ST Dir': pos.get('st_dir', None), 'Return %': None, 'PnL ₹': None, 'Holding Days': None
         })
+
 # 3. Create DataFrame and Export
 if transaction_ledger:
     trades_export_df = pd.DataFrame(transaction_ledger)
@@ -440,8 +487,6 @@ if transaction_ledger:
     # Force the entire Date column into standard Pandas datetime format before sorting
     trades_export_df['Date'] = pd.to_datetime(trades_export_df['Date'])
     
-    # THE FIX: Sort by Date (descending) AND Action (descending)
-    # Since 'S' comes after 'B', descending alphabetical order forces SOLD above BOUGHT!
     # Sort by Date (descending) -> Action (descending: S before B) -> Ticker (ascending: A to Z)
     trades_export_df.sort_values(by=['Date', 'Action', 'Ticker'], ascending=[False, True, True], inplace=True)
     
