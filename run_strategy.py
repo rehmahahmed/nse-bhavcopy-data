@@ -85,21 +85,54 @@ df['DATE'] = pd.to_datetime(df['DATE']).dt.tz_localize(None)
 df.dropna(subset=['CLOSE'], inplace=True)
 
 # Fetch Index Data for Regime Filter & Benchmark
-print("Downloading Nifty 500 Index data...")
-index_data = yf.download("^CRSLDX", start="2020-01-01", progress=False, auto_adjust=False)
-if index_data.empty:
-    index_data = yf.download("^NSEI", start="2020-01-01", progress=False, auto_adjust=False)
+print("Downloading Nifty 500 and Nifty 700 Index data...")
 
-if isinstance(index_data.columns, pd.MultiIndex):
-    index_data.columns = index_data.columns.droplevel(1)
+# Fetch Nifty 500 Index data
+nifty500_data = yf.download("^CRSLDX", start="2020-01-01", progress=False, auto_adjust=False)
+if nifty500_data.empty:
+    print("^CRSLDX not found, trying ^NSEI as fallback for Nifty 500...")
+    nifty500_data = yf.download("^NSEI", start="2020-01-01", progress=False, auto_adjust=False)
 
-index_data = index_data.reset_index()
-index_data.rename(columns={'Date': 'DATE', 'High': 'HIGH', 'Low': 'LOW', 'Close': 'CLOSE'}, inplace=True)
-index_data['DATE'] = pd.to_datetime(index_data['DATE']).dt.tz_localize(None)
+if isinstance(nifty500_data.columns, pd.MultiIndex):
+    nifty500_data.columns = nifty500_data.columns.droplevel(1)
 
-st_idx = ta.supertrend(high=index_data['HIGH'], low=index_data['LOW'], close=index_data['CLOSE'], length=15, multiplier=2.75)
-index_data['Index_ST_DIR'] = st_idx.iloc[:, 1].map({1: 'Up', -1: 'Down'}) if st_idx is not None else 'Up'
-index_regime = index_data[['DATE', 'Index_ST_DIR']].dropna()
+nifty500_data = nifty500_data.reset_index()
+nifty500_data.rename(columns={'Date': 'DATE', 'High': 'HIGH', 'Low': 'LOW', 'Close': 'CLOSE'}, inplace=True)
+nifty500_data['DATE'] = pd.to_datetime(nifty500_data['DATE']).dt.tz_localize(None)
+
+# Fetch Nifty 700 Index data
+# Note: Using ^NSEI700 as the ticker - adjust if different
+print("Downloading Nifty 700 data...")
+nifty700_data = yf.download("^NSEI700", start="2020-01-01", progress=False, auto_adjust=False)
+
+# If Nifty 700 not found, try alternative tickers
+if nifty700_data.empty:
+    print("^NSEI700 not found, trying alternative tickers...")
+    # Try other possible tickers for Nifty 700
+    alt_tickers = ["^NIFTY700", "^CRSLDX700", "^NSE700"]
+    for alt_ticker in alt_tickers:
+        nifty700_data = yf.download(alt_ticker, start="2020-01-01", progress=False, auto_adjust=False)
+        if not nifty700_data.empty:
+            print(f"Found Nifty 700 data using {alt_ticker}")
+            break
+
+# If still empty, create a placeholder
+if nifty700_data.empty:
+    print("Warning: Nifty 700 data not available. Creating placeholder using Nifty 500 data.")
+    nifty700_data = nifty500_data.copy()
+    # Add a note in the CSV by making it slightly different? Or just use same values
+
+if isinstance(nifty700_data.columns, pd.MultiIndex):
+    nifty700_data.columns = nifty700_data.columns.droplevel(1)
+
+nifty700_data = nifty700_data.reset_index()
+nifty700_data.rename(columns={'Date': 'DATE', 'High': 'HIGH', 'Low': 'LOW', 'Close': 'CLOSE'}, inplace=True)
+nifty700_data['DATE'] = pd.to_datetime(nifty700_data['DATE']).dt.tz_localize(None)
+
+# Calculate Supertrend for Nifty 500 (for regime filter)
+st_idx = ta.supertrend(high=nifty500_data['HIGH'], low=nifty500_data['LOW'], close=nifty500_data['CLOSE'], length=15, multiplier=2.75)
+nifty500_data['Index_ST_DIR'] = st_idx.iloc[:, 1].map({1: 'Up', -1: 'Down'}) if st_idx is not None else 'Up'
+index_regime = nifty500_data[['DATE', 'Index_ST_DIR']].dropna()
 
 # ==========================================
 # 2. CALCULATE INDICATORS
@@ -148,12 +181,12 @@ rsi_threshold = np.where(is_index_down, 55, 55)
 return_1d_threshold = np.where(is_index_down, -0.05, -0.05)
 rs_score_threshold = np.where(is_index_down, 95, 80)
 
-stock_selection = ((df_bt['RSI_14'] >= rsi_threshold) & (df_bt['1D_Return'] > return_1d_threshold) & 
-                   ((df_bt['3M_Return'] > 0.20) | (df_bt['6M_Return'] > 0.30) | (df_bt['1M_Return'] > 0.10)) & 
+stock_selection = ((df_bt['RSI_14'] >= rsi_threshold) & (df_bt['1D_Return'] > return_1d_threshold) &  
+                   ((df_bt['3M_Return'] > 0.20) | (df_bt['6M_Return'] > 0.30) | (df_bt['1M_Return'] > 0.10)) &  
                    (df_bt['SMA_50'] > df_bt['SMA_200']))
 
-buy_condition = ((df_bt['RS_Score'] > rs_score_threshold) & (df_bt['CLOSE'] > df_bt['SMA_200']) & 
-                 (df_bt['CLOSE'] > df_bt['ST_15_3']) & (df_bt['CLOSE'] >= df_bt['EMA_9'] * 0.95) & 
+buy_condition = ((df_bt['RS_Score'] > rs_score_threshold) & (df_bt['CLOSE'] > df_bt['SMA_200']) &  
+                 (df_bt['CLOSE'] > df_bt['ST_15_3']) & (df_bt['CLOSE'] >= df_bt['EMA_9'] * 0.95) &  
                  (df_bt['CLOSE'] <= df_bt['EMA_9'] * 1.05))
 
 df_bt['Buy_Signal'] = is_not_circuit & stock_selection & buy_condition
@@ -348,25 +381,33 @@ alloc_df = pd.DataFrame(alloc_list)
 alloc_df.to_csv(FILE_1_ALLOCATIONS, index=False)
 print(f"✅ Success! Generated targets in {FILE_1_ALLOCATIONS}")
 
-# --- File 2: Historical Portfolio Value Output (WITH BENCHMARK) ---
+# --- File 2: Historical Portfolio Value Output (WITH NIFTY 500 & NIFTY 700 VALUES) ---
 equity_df = pd.DataFrame(equity_curve)
 
-# Merge Nifty 500 Close to track benchmark performance
-idx_close = index_data[['DATE', 'CLOSE']].rename(columns={'CLOSE': 'Index_Close'})
-equity_df = pd.merge(equity_df, idx_close, on='DATE', how='left')
-equity_df['Index_Close'] = equity_df['Index_Close'].ffill()
+# Merge Nifty 500 Close values
+nifty500_close = nifty500_data[['DATE', 'CLOSE']].rename(columns={'CLOSE': 'Nifty500_Value'})
+equity_df = pd.merge(equity_df, nifty500_close, on='DATE', how='left')
+equity_df['Nifty500_Value'] = equity_df['Nifty500_Value'].ffill()
 
-if not equity_df['Index_Close'].isna().all():
-    first_valid_index = equity_df['Index_Close'].dropna().iloc[0]
-    equity_df['Benchmark_Value'] = (equity_df['Index_Close'] / first_valid_index) * INITIAL_CAPITAL
+# Merge Nifty 700 Close values
+nifty700_close = nifty700_data[['DATE', 'CLOSE']].rename(columns={'CLOSE': 'Nifty700_Value'})
+equity_df = pd.merge(equity_df, nifty700_close, on='DATE', how='left')
+equity_df['Nifty700_Value'] = equity_df['Nifty700_Value'].ffill()
+
+# Calculate Benchmark_Value using Nifty 500 (for backward compatibility with yearly returns)
+if not equity_df['Nifty500_Value'].isna().all():
+    first_valid_nifty500 = equity_df['Nifty500_Value'].dropna().iloc[0]
+    equity_df['Benchmark_Value'] = (equity_df['Nifty500_Value'] / first_valid_nifty500) * INITIAL_CAPITAL
 else:
-    equity_df['Benchmark_Value'] = INITIAL_CAPITAL 
+    equity_df['Benchmark_Value'] = INITIAL_CAPITAL
 
+# Add Drawdown and Daily Return columns
 equity_df['Drawdown'] = equity_df['Equity'] / equity_df['Equity'].cummax() - 1
 equity_df['Daily_Return'] = equity_df['Equity'].pct_change()
-equity_df.drop(columns=['Index_Close'], inplace=True)
+
+# Save to CSV with all columns (Equity, Nifty500_Value, Nifty700_Value, Benchmark_Value, Drawdown, Daily_Return)
 equity_df.to_csv(FILE_2_PORTFOLIO, index=False)
-print(f"✅ Success! Saved history to {FILE_2_PORTFOLIO}")
+print(f"✅ Success! Saved history to {FILE_2_PORTFOLIO} with Nifty500 and Nifty700 values")
 
 # --- File 3: Yearly Returns Output ---
 yearly_returns = []
