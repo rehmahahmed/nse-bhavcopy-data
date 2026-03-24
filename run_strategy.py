@@ -77,7 +77,7 @@ except FileNotFoundError:
     nifty_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS"]
 
 print(f"Downloading historical data for {len(nifty_tickers)} tickers...")
-raw_data = yf.download(nifty_tickers, start="2020-01-01", progress=False, auto_adjust=False)
+raw_data = yf.download(nifty_tickers, start="2020-01-01", progress=False, auto_adjust=False, threads=False)
 
 df = raw_data.stack(level=1, future_stack=True).reset_index()
 df.rename(columns={'Date': 'DATE', 'Ticker': 'TICKER', 'Open': 'OPEN', 'High': 'HIGH', 'Low': 'LOW', 'Close': 'CLOSE'}, inplace=True)
@@ -280,7 +280,7 @@ for current_date in unique_dates:
             daily_portfolio_value += pos['qty'] * daily_data.loc[ticker, 'CLOSE']
         else:
             daily_portfolio_value += pos['qty'] * pos['raw_entry_price']
-    equity_curve.append({'Date': current_date, 'Equity': daily_portfolio_value})
+    equity_curve.append({'DATE': current_date, 'Equity': daily_portfolio_value})
 
 # ==========================================
 # 5. PREPARE TODAY'S TARGETS (DASHBOARD OUTPUT)
