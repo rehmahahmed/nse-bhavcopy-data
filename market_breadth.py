@@ -61,7 +61,7 @@ try:
     df_tickers['Symbol'] = df_tickers['Symbol'].str.strip()
     symbols = df_tickers['Symbol'].tolist()
     
-    # --- NEW: Create a dictionary mapping each symbol to its Industry ---
+    # Create a dictionary mapping each symbol to its Industry
     industry_map = dict(zip(df_tickers['Symbol'], df_tickers['Industry']))
 except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
@@ -77,7 +77,7 @@ for i, symbol in enumerate(symbols):
 
     historicParam = {
         "exchange": "NSE", "symboltoken": token_map[symbol],
-        "interval": INTERVAL, "fromdate": FROM_DATE, "todate": TO_DATE
+        "interval": "ONE_DAY", "fromdate": FROM_DATE, "todate": TO_DATE
     }
 
     # RETRY LOGIC FOR RATE LIMITS AND NULLS
@@ -132,18 +132,18 @@ sma_200 = df_close.rolling(window=200).mean()
 # ==========================================
 # 5. AGGREGATE COUNTS & SAVE (EXACTLY 5 YEARS)
 # ==========================================
-print("Aggregating breadth metric by Sector...")
+print("Aggregating breadth metric by Nifty 750 and Sectors...")
 
 # Create an empty dataframe with our Dates as the index
 df_breadth = pd.DataFrame(index=df_close.index)
 
-# Original total count column (kept exactly as requested)
-df_breadth['Stocks_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
-
-# --- NEW: Group successfully fetched symbols by their Industry ---
 fetched_symbols = df_close.columns.tolist()
-industry_groups = {}
 
+# 1. Nifty 750 Master Breadth
+df_breadth['Nifty750_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
+
+# 2. Sector-Specific Breadth
+industry_groups = {}
 for sym in fetched_symbols:
     ind = industry_map.get(sym, 'Unknown Sector')
     if pd.isna(ind): ind = 'Unknown Sector' # Handle any blank industry rows
@@ -152,7 +152,6 @@ for sym in fetched_symbols:
         industry_groups[ind] = []
     industry_groups[ind].append(sym)
 
-# --- NEW: Calculate breadth for each specific sector ---
 for ind, syms in industry_groups.items():
     # Only checks the stocks belonging to that specific industry array
     df_breadth[ind] = (df_close[syms] > sma_200[syms]).sum(axis=1)
@@ -167,6 +166,6 @@ df_breadth['Date'] = df_breadth['Date'].dt.strftime('%Y-%m-%d')
 
 df_breadth.to_csv(OUTPUT_FILE, index=False)
 
-print(f"\n[SUCCESS] Generated exact 5-year breadth history including Sector Breadth (Starting {cutoff_date_str}).")
+print(f"\n[SUCCESS] Generated exact 5-year breadth history (Starting {cutoff_date_str}).")
 print(f"Saved to {OUTPUT_FILE}")
 print(f"Total trading days recorded: {len(df_breadth)}")
