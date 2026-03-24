@@ -43,7 +43,7 @@ jobs:
           git add daily_allocations.csv historical_portfolio_value.csv strategy_trade_history.csv || true
           
           if ! git diff --staged --quiet; then
-            git commit -m "Automated Strategy Update (3:00 PM Execution)"
+            git commit -m "Automated Strategy Update (2:00 PM Execution)"
             git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
             git push origin main || git push origin master
           else
