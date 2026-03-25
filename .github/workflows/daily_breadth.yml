@@ -28,7 +28,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas smartapi-python pyotp numpy websocket logzero
+          pip install pandas smartapi-python pyotp numpy websocket logzero yfinance
 
       - name: Run Market Breadth Script
         env:
