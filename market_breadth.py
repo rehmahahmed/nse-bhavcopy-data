@@ -25,7 +25,7 @@ INTERVAL = "ONE_DAY"
 
 # --- 5-Year Time Calculation with DMA Padding ---
 end_date = datetime.datetime.now()
-five_years_ago = end_date - datetime.timedelta(days=7 * 365)
+five_years_ago = end_date - datetime.timedelta(days=11 * 365)
 
 # We need 200 trading days (~300 calendar days) BEFORE our 5-year start date 
 # so the 200 SMA can calculate properly on day one.
