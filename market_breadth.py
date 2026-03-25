@@ -7,6 +7,7 @@ import pyotp
 import os
 from SmartApi import SmartConnect
 import warnings
+import yfinance as yf # <-- ADDED YFINANCE
 
 warnings.filterwarnings('ignore')
 
@@ -139,8 +140,8 @@ df_breadth = pd.DataFrame(index=df_close.index)
 
 fetched_symbols = df_close.columns.tolist()
 
-# 1. Nifty 750 Master Breadth
-df_breadth['Nifty750_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
+# 1. Master Breadth Count
+df_breadth['Total_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
 
 # 2. Sector-Specific Breadth
 industry_groups = {}
@@ -160,9 +161,38 @@ for ind, syms in industry_groups.items():
 cutoff_date_str = five_years_ago.strftime('%Y-%m-%d')
 df_breadth = df_breadth.loc[cutoff_date_str:]
 
-# Convert the Date index back into a standard column for the CSV
+# Convert the Date index back into a standard column for merging
 df_breadth = df_breadth.reset_index()
 df_breadth['Date'] = df_breadth['Date'].dt.strftime('%Y-%m-%d')
+
+# --- NEW: FETCH AND MERGE INDEX DATA ---
+print("Fetching Index data to overlay with breadth...")
+# Trying a 750 proxy first, falling back to standard 500
+index_ticker = "NIFTY_750.NS" 
+idx_data = yf.download(index_ticker, start=cutoff_date_str, progress=False)
+
+if idx_data.empty:
+    print(f"{index_ticker} not found. Falling back to Nifty 500 (^CRSLDX) for benchmark correlation...")
+    idx_data = yf.download("^CRSLDX", start=cutoff_date_str, progress=False)
+
+if not idx_data.empty:
+    # Clean up multi-index columns from yfinance if present
+    if isinstance(idx_data.columns, pd.MultiIndex):
+        idx_data.columns = idx_data.columns.droplevel(1)
+        
+    idx_data = idx_data.reset_index()
+    idx_data['Date'] = pd.to_datetime(idx_data['Date']).dt.strftime('%Y-%m-%d')
+    idx_data = idx_data[['Date', 'Close']].rename(columns={'Close': 'Index_Close'})
+    
+    # Merge on the exact dates we have breadth data for
+    df_breadth = pd.merge(df_breadth, idx_data, on='Date', how='left')
+    
+    # Forward-fill index prices in case the API missed a specific holiday/trading day discrepancy
+    df_breadth['Index_Close'] = df_breadth['Index_Close'].ffill()
+else:
+    print("Warning: Could not fetch index data.")
+    df_breadth['Index_Close'] = None
+# ---------------------------------------
 
 df_breadth.to_csv(OUTPUT_FILE, index=False)
 
