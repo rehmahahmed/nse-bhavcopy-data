@@ -4,13 +4,9 @@ import pandas_ta as ta
 import yfinance as yf
 import os
 import warnings
-import urllib.request
-import json
-import pyotp
 import time
 from datetime import datetime, timedelta
 import pytz
-from SmartApi import SmartConnect
 
 warnings.filterwarnings('ignore')
 
@@ -18,7 +14,6 @@ warnings.filterwarnings('ignore')
 FILE_1_ALLOCATIONS = "daily_allocations.csv"
 FILE_2_PORTFOLIO = "historical_portfolio_value.csv"
 FILE_3_TRADES = "strategy_trade_history.csv"
-FILE_4_YEARLY_RETURNS = "yearly_returns.csv" 
 TICKER_FILE = "ind_nifty500list.csv"
 
 MAX_POSITIONS = 6
@@ -28,36 +23,6 @@ ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
 print(f"Running Standalone EOD Strategy (T+1 Open Execution). Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
-
-# ==========================================
-# 0. ANGEL ONE LOGIN (For Live CMP Fallbacks)
-# ==========================================
-API_KEY = os.environ.get("ANGEL_API_KEY")
-CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
-PIN = os.environ.get("ANGEL_PIN")
-TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
-
-smartApi = None
-token_map = {}
-
-if API_KEY and CLIENT_CODE:
-    print("Connecting to Angel One API...")
-    try:
-        smartApi = SmartConnect(api_key=API_KEY)
-        totp = pyotp.TOTP(TOTP_SECRET).now()
-        login_data = smartApi.generateSession(CLIENT_CODE, PIN, totp)
-        
-        if login_data['status']:
-            instrument_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-            response = urllib.request.urlopen(instrument_url)
-            instrument_list = json.loads(response.read())
-            token_map = {inst['symbol'].replace('-EQ', ''): inst['token'] 
-                         for inst in instrument_list if inst['exch_seg'] == 'NSE' and inst['symbol'].endswith('-EQ')}
-            print("Successfully authenticated with Angel One.")
-        else:
-            print("Angel Login Failed:", login_data['message'])
-    except Exception as e:
-        print(f"Error during Angel One authentication: {e}")
 
 # ==========================================
 # 1. LOAD TICKERS & FETCH YFINANCE DATA
@@ -76,7 +41,7 @@ except FileNotFoundError:
     print(f"Warning: {TICKER_FILE} not found. Using a fallback list.")
     nifty_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "SBI.NS"]
 
-print(f"Downloading historical data for {len(nifty_tickers)} tickers...")
+print(f"Downloading historical data for {len(nifty_tickers)} tickers from YFinance...")
 raw_data = yf.download(nifty_tickers, start="2020-01-01", progress=False, auto_adjust=False, threads=False)
 
 df = raw_data.stack(level=1, future_stack=True).reset_index()
@@ -134,10 +99,10 @@ df['ST_15_3'] = st_df['ST_15_3']
 df['ST_DIR'] = st_df['ST_DIR']
 
 df['Weighted Avg'] = (0.3 * df['3M_Return'] + 0.3 * df['6M_Return'] + 0.2 * df['9M_Return'] + 0.2 * df['12M_Return'])
-df['RS_Score'] = df.groupby('DATE')['Weighted Avg'].rank(pct=True) * 100
-df['RS_Score'] = df['RS_Score'].round(0).clip(lower=1, upper=99)
+df['RS'] = df.groupby('DATE')['Weighted Avg'].rank(pct=True) * 100
+df['RS'] = df['RS'].round(0).clip(lower=1, upper=99)
 
-df_bt = df.dropna(subset=['SMA_200', '12M_Return', 'RS_Score', 'ST_15_3']).copy()
+df_bt = df.dropna(subset=['SMA_200', '12M_Return', 'RS', 'ST_15_3']).copy()
 
 df_bt = pd.merge(df_bt, index_regime, on='DATE', how='left')
 df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
@@ -156,14 +121,14 @@ stock_selection = ((df_bt['RSI_14'] >= rsi_threshold) & (df_bt['1D_Return'] > re
                    ((df_bt['3M_Return'] > 0.20) | (df_bt['6M_Return'] > 0.30) | (df_bt['1M_Return'] > 0.10)) &  
                    (df_bt['SMA_50'] > df_bt['SMA_200']))
 
-buy_condition = ((df_bt['RS_Score'] > rs_score_threshold) & (df_bt['CLOSE'] > df_bt['SMA_200']) &  
+buy_condition = ((df_bt['RS'] > rs_score_threshold) & (df_bt['CLOSE'] > df_bt['SMA_200']) &  
                  (df_bt['CLOSE'] > df_bt['ST_15_3']) & (df_bt['CLOSE'] >= df_bt['EMA_9'] * 0.95) &  
                  (df_bt['CLOSE'] <= df_bt['EMA_9'] * 1.05))
 
 df_bt['Buy_Signal'] = is_not_circuit & stock_selection & buy_condition
 
 # SHIFTING: We evaluate yesterday to act today
-shift_cols = ['Buy_Signal', 'CLOSE', 'ST_15_3', 'SMA_200', 'RS_Score', 'RSI_14', '3M_Return', '6M_Return', '9M_Return', 'ST_DIR', 'Index_ST_DIR']
+shift_cols = ['Buy_Signal', 'CLOSE', 'ST_15_3', 'SMA_200', 'RS', 'RSI_14', '3M_Return', '6M_Return', '9M_Return', 'ST_DIR', 'Index_ST_DIR']
 for col in shift_cols:
     df_bt[f'Prev_{col}'] = df_bt.groupby('TICKER')[col].shift(1)
 
@@ -243,7 +208,7 @@ for current_date in unique_dates:
                     'Ticker': ticker, 'Buy Price': round(pos['net_entry_price'], 2), 'Quantity': pos['qty'],
                     'Buy Date': pos['entry_date'], 'Sell Price': round(net_exit_price, 2), 'Sell Date': current_date,
                     'Sell Reason': sell_reason, 'RSI': pos['rsi'], '3M Return': pos['ret_3m'], '6M Return': pos['ret_6m'],
-                    '9M Return': pos['ret_9m'], 'RS Score': pos['rs_score'], 'ST Value': pos['st_val'], 'ST Dir': pos['st_dir'],
+                    '9M Return': pos['ret_9m'], 'RS': pos['rs'], 'ST Value': pos['st_val'], 'ST Dir': pos['st_dir'],
                     'Return %': round(ret_pct, 2), 'PnL ₹': round(pnl, 2), 'Holding Days': (current_date - pd.to_datetime(pos['entry_date'])).days
                 })
                 tickers_to_remove.append(ticker)
@@ -251,7 +216,7 @@ for current_date in unique_dates:
     for t in tickers_to_remove: del positions[t]
 
     # Process Buys (Evaluated yesterday, executed at Open today)
-    buy_signals = daily_data[daily_data['Prev_Buy_Signal']].sort_values(by='Prev_RS_Score', ascending=False)
+    buy_signals = daily_data[daily_data['Prev_Buy_Signal']].sort_values(by='Prev_RS', ascending=False)
 
     for ticker, row in buy_signals.iterrows():
         if row['HIGH'] == row['LOW']: continue
@@ -272,7 +237,7 @@ for current_date in unique_dates:
                     'ret_3m': round(row['Prev_3M_Return'] * 100, 2) if pd.notna(row['Prev_3M_Return']) else 0,
                     'ret_6m': round(row['Prev_6M_Return'] * 100, 2) if pd.notna(row['Prev_6M_Return']) else 0,
                     'ret_9m': round(row['Prev_9M_Return'] * 100, 2) if pd.notna(row['Prev_9M_Return']) else 0,
-                    'rs_score': row['Prev_RS_Score'], 'st_val': round(row['Prev_ST_15_3'], 2) if pd.notna(row['Prev_ST_15_3']) else 0,
+                    'rs': row['Prev_RS'], 'st_val': round(row['Prev_ST_15_3'], 2) if pd.notna(row['Prev_ST_15_3']) else 0,
                     'st_dir': row['Prev_ST_DIR']
                 }
                 capital -= cost
@@ -317,14 +282,21 @@ for ticker, pos in positions.items():
 for t in sells_for_tomorrow: del positions[t]
 
 # Check for Buys based on TODAY'S closing indicators (Act Tomorrow Open)
-buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS_Score', ascending=False)
+buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS', ascending=False)
 
 for ticker, row in buy_candidates.iterrows():
+    # --- BUDGET CHECK: Stops expensive stocks from getting stuck in "Pending" ---
+    estimated_cost = row['CLOSE'] * (1 + BROKERAGE_RATE)
+    available_budget = POSITION_SIZE if capital >= POSITION_SIZE else capital
+
     if len(positions) < MAX_POSITIONS and ticker not in positions:
-        positions[ticker] = {
-            'raw_entry_price': 'Pending Next Open', 'net_entry_price': '-', 'qty': 'TBD',
-            'entry_date': 'Pending Next Open', 'index_st': row['Index_ST_DIR'], 'is_new': True 
-        }
+        if available_budget > estimated_cost:
+            positions[ticker] = {
+                'raw_entry_price': 'Pending Next Open', 'net_entry_price': '-', 'qty': 'TBD',
+                'entry_date': 'Pending Next Open', 'index_st': row['Index_ST_DIR'], 'is_new': True 
+            }
+        else:
+            print(f"Skipping {ticker} on Dashboard: Cannot afford 1 share. Price: {row['CLOSE']:.2f}, Budget: {available_budget:.2f}")
 
 # --- File 1: Allocations Output ---
 alloc_list = []
@@ -378,49 +350,19 @@ equity_df.drop(columns=['Nifty500_Value'], inplace=True, errors='ignore')
 equity_df.to_csv(FILE_2_PORTFOLIO, index=False)
 print(f"✅ Success! Saved history to {FILE_2_PORTFOLIO}")
 
-# --- File 3: Yearly Returns Output ---
-yearly_returns = []
-equity_df['Year'] = equity_df['DATE'].dt.year
-years = sorted(equity_df['Year'].unique())
-
-prev_equity = INITIAL_CAPITAL
-prev_bench = INITIAL_CAPITAL
-
-for y in years:
-    year_data = equity_df[equity_df['Year'] == y]
-    if not year_data.empty:
-        end_equity = year_data['Equity'].iloc[-1]
-        end_bench = year_data['Benchmark_Value'].iloc[-1]
-        
-        strat_ret = ((end_equity / prev_equity) - 1) * 100
-        bench_ret = ((end_bench / prev_bench) - 1) * 100
-        
-        yearly_returns.append({
-            'Year': y,
-            'Strategy_Return_%': round(strat_ret, 2),
-            'Benchmark_Return_%': round(bench_ret, 2)
-        })
-        
-        prev_equity = end_equity
-        prev_bench = end_bench
-
-yearly_df = pd.DataFrame(yearly_returns)
-yearly_df.to_csv(FILE_4_YEARLY_RETURNS, index=False)
-print(f"✅ Success! Saved annual breakdown to {FILE_4_YEARLY_RETURNS}")
-
-# --- File 4: Trades Dump Export ---
+# --- File 3: Trades Dump Export ---
 transaction_ledger = []
 
 if trades:
     for t in trades:
         transaction_ledger.append({
             'Ticker': t['Ticker'], 'Action': 'BOUGHT', 'Date': t['Buy Date'], 'Price': t['Buy Price'], 'Quantity': t['Quantity'], 'Reason': 'Entry',
-            'RSI': t['RSI'], '3M Return': t['3M Return'], '6M Return': t['6M Return'], '9M Return': t['9M Return'], 'RS Score': t['RS Score'], 'ST Value': t['ST Value'],
+            'RSI': t['RSI'], '3M Return': t['3M Return'], '6M Return': t['6M Return'], '9M Return': t['9M Return'], 'RS': t['RS'], 'ST Value': t['ST Value'],
             'ST Dir': t['ST Dir'], 'Return %': None, 'PnL ₹': None, 'Holding Days': None
         })
         transaction_ledger.append({
             'Ticker': t['Ticker'], 'Action': 'SOLD', 'Date': t['Sell Date'], 'Price': t['Sell Price'], 'Quantity': t['Quantity'], 'Reason': t['Sell Reason'],
-            'RSI': t['RSI'], '3M Return': t['3M Return'], '6M Return': t['6M Return'], '9M Return': t['9M Return'], 'RS Score': t['RS Score'], 'ST Value': t['ST Value'],
+            'RSI': t['RSI'], '3M Return': t['3M Return'], '6M Return': t['6M Return'], '9M Return': t['9M Return'], 'RS': t['RS'], 'ST Value': t['ST Value'],
             'ST Dir': t['ST Dir'], 'Return %': t['Return %'], 'PnL ₹': t['PnL ₹'], 'Holding Days': t['Holding Days']
         })
 
@@ -431,7 +373,7 @@ if positions:
             transaction_ledger.append({
                 'Ticker': ticker, 'Action': 'BOUGHT', 'Date': entry_date, 'Price': round(pos['net_entry_price'], 2), 'Quantity': pos['qty'], 'Reason': 'Active Open Position',
                 'RSI': pos.get('rsi', None), '3M Return': pos.get('ret_3m', None), '6M Return': pos.get('ret_6m', None), '9M Return': pos.get('ret_9m', None), 
-                'RS Score': pos.get('rs_score', None), 'ST Value': pos.get('st_val', None), 'ST Dir': pos.get('st_dir', None), 'Return %': None, 'PnL ₹': None, 'Holding Days': None
+                'RS': pos.get('rs', None), 'ST Value': pos.get('st_val', None), 'ST Dir': pos.get('st_dir', None), 'Return %': None, 'PnL ₹': None, 'Holding Days': None
             })
 
 if transaction_ledger:
