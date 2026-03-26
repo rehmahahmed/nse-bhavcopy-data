@@ -147,7 +147,7 @@ if df_combined.empty:
     exit()
 
 df_combined = df_combined.dropna(subset=['Close'])
-print("Calculating RS, Return percentages, and Technical Indicators...")
+print("Calculating RS, Return percentages, and Technical Indicators (Angel Data)...")
 df_combined = df_combined.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
 
 # Define trading day periods
@@ -239,7 +239,7 @@ df_combined['Weighted Sharpe'] = (
 df_combined.to_csv(HISTORY_FILENAME, index=False)
 
 # ==========================================
-# 6. FETCH INDEX REGIME & EXTRACT DASHBOARD
+# 6. FETCH INDEX REGIME 
 # ==========================================
 print("Fetching Nifty 500 Index data for market regime filter...")
 try:
@@ -262,40 +262,90 @@ except Exception as e:
     print(f"Error fetching index: {e}")
     index_st_dir_latest = 'Up'
 
+# ==========================================
+# 7. GENERATE SIGNALS USING YFINANCE DATA
+# ==========================================
+print("Fetching 2 years of YFinance data to generate pure Signals...")
+yf_symbols = [str(sym).strip() + ".NS" for sym in nifty750_symbols]
+
+# 2 years needed to properly calculate 252-day returns and 200 SMA
+yf_raw = yf.download(yf_symbols, period="2y", progress=False, auto_adjust=False)
+
+# Clean up yfinance multi-index columns securely
+try:
+    yf_df = yf_raw.stack(level=1, future_stack=True).reset_index()
+except TypeError:
+    yf_df = yf_raw.stack(level=1).reset_index()
+
+yf_df.rename(columns={'Ticker': 'Symbol', 'level_1': 'Symbol'}, inplace=True, errors='ignore')
+yf_df['Symbol'] = yf_df['Symbol'].str.replace('.NS', '', regex=False)
+yf_df = yf_df.sort_values(by=['Symbol', 'Date']).reset_index(drop=True)
+yf_df.dropna(subset=['Close'], inplace=True)
+
+print("Calculating Technicals for YFinance Signals...")
+yf_df['SMA_50'] = yf_df.groupby('Symbol')['Close'].transform(lambda x: ta.sma(x, length=50))
+yf_df['SMA_200'] = yf_df.groupby('Symbol')['Close'].transform(lambda x: ta.sma(x, length=200))
+yf_df['EMA_9'] = yf_df.groupby('Symbol')['Close'].transform(lambda x: ta.ema(x, length=9))
+yf_df['RSI_14'] = yf_df.groupby('Symbol')['Close'].transform(lambda x: ta.rsi(x, length=14))
+
+yf_df['1D Return %'] = yf_df.groupby('Symbol')['Close'].pct_change(1) * 100
+yf_df['1M Return %'] = yf_df.groupby('Symbol')['Close'].pct_change(21) * 100
+yf_df['3M Return %'] = yf_df.groupby('Symbol')['Close'].pct_change(63) * 100
+yf_df['6M Return %'] = yf_df.groupby('Symbol')['Close'].pct_change(126) * 100
+yf_df['9M Return %'] = yf_df.groupby('Symbol')['Close'].pct_change(189) * 100
+yf_df['12M Return %'] = yf_df.groupby('Symbol')['Close'].pct_change(252) * 100
+
+yf_st_list = []
+for sym, group in yf_df.groupby('Symbol'):
+    st = ta.supertrend(high=group['High'], low=group['Low'], close=group['Close'], length=15, multiplier=2.75)
+    yf_st_list.append(pd.DataFrame({'ST_15_3': st.iloc[:, 0] if st is not None else np.nan}, index=group.index))
+
+yf_df['ST_15_3'] = pd.concat(yf_st_list)['ST_15_3']
+
+# Calculate pure YFinance RS
+yf_df['weighted_avg'] = (0.40 * yf_df['3M Return %'].fillna(0)/100) + \
+                        (0.20 * yf_df['6M Return %'].fillna(0)/100) + \
+                        (0.20 * yf_df['9M Return %'].fillna(0)/100) + \
+                        (0.20 * yf_df['12M Return %'].fillna(0)/100)
+
+yf_df['RS'] = yf_df.groupby('Date')['weighted_avg'].transform(calculate_daily_rank).round(0)
+
+# Extract only the latest row for evaluating the signal
+yf_latest = yf_df.groupby('Symbol').tail(1).copy()
+
+is_circuit_day_yf = yf_latest['High'] == yf_latest['Low']
+price_above_sma200_yf = (yf_latest['Close'] > yf_latest['SMA_200']) & yf_latest['SMA_200'].notna()
+price_above_supertrend_yf = (yf_latest['Close'] > yf_latest['ST_15_3']) | yf_latest['ST_15_3'].isna()
+
+sell_triggered_yf = (~price_above_sma200_yf) | (~price_above_supertrend_yf)
+buy_triggered_yf = (
+    (~is_circuit_day_yf) &
+    (yf_latest['RSI_14'] > 55) &
+    (yf_latest['1D Return %'] > -5.0) &
+    ((yf_latest['3M Return %'] > 20.0) | (yf_latest['6M Return %'] > 30.0) | (yf_latest['1M Return %'] > 10.0)) &
+    (yf_latest['SMA_50'] > yf_latest['SMA_200']) &
+    (yf_latest['RS'] > 80) &
+    price_above_sma200_yf &
+    price_above_supertrend_yf &
+    (abs((yf_latest['Close'] / yf_latest['EMA_9']) - 1) <= 0.05)
+)
+
+yf_latest['Signal'] = np.select([sell_triggered_yf, buy_triggered_yf], ['SELL', 'BUY'], default='HOLD')
+
+# Store just the Symbol and Signal to merge into our main dashboard
+yf_signals = yf_latest[['Symbol', 'Signal']]
+
+# ==========================================
+# 8. EXTRACT DASHBOARD
+# ==========================================
 print("Extracting the latest rows for the dashboard...")
 
-# Get the latest row for each symbol
+# Get the latest row from the Angel Database
 df_latest = df_combined.groupby('Symbol').tail(1).copy()
 
-# --- VECTORIZED SIGNAL LOGIC (Applied only to the latest day) ---
-print("Calculating Buy/Sell/Hold signals...")
-is_circuit_day = df_latest['High'] == df_latest['Low']
-
-# Handling NaNs: if SMA or ST is missing, handle them properly
-price_above_sma200 = (df_latest['Close'] > df_latest['SMA_200']) & df_latest['SMA_200'].notna()
-price_above_supertrend = (df_latest['Close'] > df_latest['ST_15_3']) | df_latest['ST_15_3'].isna()
-
-sell_triggered = (~price_above_sma200) | (~price_above_supertrend)
-
-buy_triggered = (
-    (~is_circuit_day) &
-    (df_latest['RSI_14'] > 55) & 
-    (df_latest['1D Return %'] > -5.0) & 
-    ((df_latest['3M Return %'] > 20.0) | (df_latest['6M Return %'] > 30.0) | (df_latest['1M Return %'] > 10.0)) &
-    (df_latest['SMA_50'] > df_latest['SMA_200']) & 
-    (df_latest['RS'] > 80) & 
-    price_above_sma200 & 
-    price_above_supertrend &
-    (abs((df_latest['Close'] / df_latest['EMA_9']) - 1) <= 0.05)
-)
-
-# Apply the signals to a new column using np.select
-df_latest['Signal'] = np.select(
-    [sell_triggered, buy_triggered], 
-    ['SELL', 'BUY'], 
-    default='HOLD'
-)
-# ----------------------------------------------------------------
+# Merge the pure YFinance signal into the Angel dashboard
+df_latest = pd.merge(df_latest, yf_signals, on='Symbol', how='left')
+df_latest['Signal'] = df_latest['Signal'].fillna('HOLD')
 
 if 'Industry' in df_latest.columns:
     df_latest = df_latest.drop(columns=['Industry'])
@@ -311,17 +361,16 @@ df_final['Prev_Close'] = df_final['Close']
 df_final['1M_Return'] = df_final['ret_1m']
 df_final['3M_Return'] = df_final['ret_3m']
 df_final['6M_Return'] = df_final['ret_6m']
-df_final['RS_Score'] = df_final['RS']
 df_final['Index_ST_DIR'] = index_st_dir_latest
 
-# Exporting all columns, now including 'Signal'
+# Exporting exactly the requested columns
 final_columns = [
     'Symbol', 'Industry', 'Signal', '1D Return %', '1W Return %', '1M Return %', 
     '3M Return %', '6M Return %', 'Above_SMA_200', 'Weighted Sharpe', 
     'weighted_avg', 'RS', 'Last_Updated', 'Chart_Link',
     # --- Allocation Script Needs ---
     'Prev_Close', 'RSI_14', '1M_Return', '3M_Return', '6M_Return', 
-    'SMA_50', 'SMA_200', 'EMA_9', 'ST_15_3', 'RS_Score', 'Index_ST_DIR'
+    'SMA_50', 'SMA_200', 'EMA_9', 'ST_15_3', 'Index_ST_DIR'
 ]
 
 df_final = df_final[final_columns]
