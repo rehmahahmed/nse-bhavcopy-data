@@ -98,11 +98,17 @@ st_df = pd.concat(st_list)
 df['ST_15_3'] = st_df['ST_15_3']
 df['ST_DIR'] = st_df['ST_DIR']
 
-df['Weighted Avg'] = (0.3 * df['3M_Return'] + 0.3 * df['6M_Return'] + 0.2 * df['9M_Return'] + 0.2 * df['12M_Return'])
+# --- FIX 1: Match the Dashboard's RS Weighting and allow missing 12M data ---
+df['Weighted Avg'] = (0.40 * df['3M_Return'].fillna(0)) + \
+                     (0.20 * df['6M_Return'].fillna(0)) + \
+                     (0.20 * df['9M_Return'].fillna(0)) + \
+                     (0.20 * df['12M_Return'].fillna(0))
+
 df['RS'] = df.groupby('DATE')['Weighted Avg'].rank(pct=True) * 100
 df['RS'] = df['RS'].round(0).clip(lower=1, upper=99)
 
-df_bt = df.dropna(subset=['SMA_200', '12M_Return', 'RS', 'ST_15_3']).copy()
+# --- FIX 2: Stop deleting stocks that don't have 12M_Return history ---
+df_bt = df.dropna(subset=['SMA_200', 'RS', 'ST_15_3']).copy()
 
 df_bt = pd.merge(df_bt, index_regime, on='DATE', how='left')
 df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
@@ -113,9 +119,10 @@ df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
 is_not_circuit = df_bt['HIGH'] != df_bt['LOW']
 is_index_down = df_bt['Index_ST_DIR'] == 'Down'
 
-rsi_threshold = np.where(is_index_down, 55, 55)
-return_1d_threshold = np.where(is_index_down, -0.05, -0.05)
-rs_score_threshold = np.where(is_index_down, 95, 80)
+# --- FIX 3: Force the Backtest to always use 80, matching the Dashboard ---
+rsi_threshold = 55
+return_1d_threshold = -0.05
+rs_score_threshold = 80
 
 stock_selection = ((df_bt['RSI_14'] >= rsi_threshold) & (df_bt['1D_Return'] > return_1d_threshold) &  
                    ((df_bt['3M_Return'] > 0.20) | (df_bt['6M_Return'] > 0.30) | (df_bt['1M_Return'] > 0.10)) &  
