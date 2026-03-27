@@ -119,10 +119,10 @@ df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
 is_not_circuit = df_bt['HIGH'] != df_bt['LOW']
 is_index_down = df_bt['Index_ST_DIR'] == 'Down'
 
-# --- FIX 3: Force the Backtest to always use 80, matching the Dashboard ---
+# --- FIX 3: Dynamic RS Threshold (Nifty Regime Check) ---
 rsi_threshold = 55
 return_1d_threshold = -0.05
-rs_score_threshold = 80
+rs_score_threshold = np.where(is_index_down, 95, 80)
 
 stock_selection = ((df_bt['RSI_14'] >= rsi_threshold) & (df_bt['1D_Return'] > return_1d_threshold) &  
                    ((df_bt['3M_Return'] > 0.20) | (df_bt['6M_Return'] > 0.30) | (df_bt['1M_Return'] > 0.10)) &  
