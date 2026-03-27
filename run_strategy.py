@@ -261,9 +261,18 @@ for current_date in unique_dates:
 # ==========================================
 # 5. PREPARE TODAY'S TARGETS (DASHBOARD OUTPUT)
 # ==========================================
+# ==========================================
+# 5. PREPARE TODAY'S TARGETS (DASHBOARD OUTPUT)
+# ==========================================
 print("Preparing Output Files...")
 latest_date = unique_dates[-1]
-last_day_data = df_bt[df_bt['DATE'] == latest_date].set_index('TICKER')
+
+# --- THE FIX: YFinance Delay Handler ---
+# Instead of strictly filtering by latest_date, we grab the most recent row for EACH ticker.
+# We also apply a 5-day cutoff just to ensure we don't accidentally buy a stock that was delisted months ago!
+recent_cutoff = latest_date - pd.Timedelta(days=5)
+last_day_data = df_bt[df_bt['DATE'] >= recent_cutoff].groupby('TICKER').tail(1).set_index('TICKER')
+
 latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 
 sells_for_tomorrow = []
