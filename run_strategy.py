@@ -17,7 +17,7 @@ FILE_3_TRADES = "strategy_trade_history.csv"
 TICKER_FILE = "ind_nifty500list.csv"
 
 MAX_POSITIONS = 6
-INITIAL_CAPITAL = 100000.0
+INITIAL_CAPITAL = 1000000.0
 
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
