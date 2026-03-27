@@ -313,6 +313,10 @@ yf_df['RS'] = yf_df.groupby('Date')['weighted_avg'].transform(calculate_daily_ra
 # Extract only the latest row for evaluating the signal
 yf_latest = yf_df.groupby('Symbol').tail(1).copy()
 
+# --- THE FIX: Add the Nifty Regime Check to the Dashboard! ---
+is_index_down_yf = index_st_dir_latest == 'Down'
+rs_threshold_yf = 95 if is_index_down_yf else 80
+
 is_circuit_day_yf = yf_latest['High'] == yf_latest['Low']
 price_above_sma200_yf = (yf_latest['Close'] > yf_latest['SMA_200']) & yf_latest['SMA_200'].notna()
 price_above_supertrend_yf = (yf_latest['Close'] > yf_latest['ST_15_3']) | yf_latest['ST_15_3'].isna()
@@ -324,14 +328,13 @@ buy_triggered_yf = (
     (yf_latest['1D Return %'] > -5.0) &
     ((yf_latest['3M Return %'] > 20.0) | (yf_latest['6M Return %'] > 30.0) | (yf_latest['1M Return %'] > 10.0)) &
     (yf_latest['SMA_50'] > yf_latest['SMA_200']) &
-    (yf_latest['RS'] > 80) &
+    (yf_latest['RS'] > rs_threshold_yf) & # <--- Now uses dynamic 80/95 rule
     price_above_sma200_yf &
     price_above_supertrend_yf &
     (abs((yf_latest['Close'] / yf_latest['EMA_9']) - 1) <= 0.05)
 )
 
 yf_latest['Signal'] = np.select([sell_triggered_yf, buy_triggered_yf], ['SELL', 'BUY'], default='HOLD')
-
 # Store just the Symbol and Signal to merge into our main dashboard
 yf_signals = yf_latest[['Symbol', 'Signal']]
 
