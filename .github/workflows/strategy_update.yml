@@ -2,8 +2,10 @@ name: Daily Strategy Backtest & Allocations
 
 on:
   schedule:
-    # Runs at 08:17 AM UTC, which is exactly 9.30 am IST, Monday through Friday
+    # Runs at 04:00 AM UTC, which is exactly 9:30 AM IST, Monday through Friday
     - cron: '00 04 * * 1-5'
+    # Runs at 08:17 AM UTC, which is exactly 1:47 PM IST, Monday through Friday
+    - cron: '17 08 * * 1-5'
   workflow_dispatch: 
 
 permissions:
