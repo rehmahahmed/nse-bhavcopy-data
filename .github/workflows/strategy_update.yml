@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 💥 FIX: Forces Git to pull the full history so it doesn't get confused by deleted files
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -34,15 +36,21 @@ jobs:
 
       - name: Commit and Push CSVs
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           
           # Stage the 3 specific files the script generates
-          git add daily_allocations.csv historical_portfolio_value.csv strategy_trade_history.csv || true
+          git add daily_allocations.csv historical_portfolio_value.csv strategy_trade_history.csv
           
+          # Check if there are actual changes to commit
           if ! git diff --staged --quiet; then
             git commit -m "Automated Strategy Update"
-            git pull origin main --rebase -X theirs || git pull origin master --rebase -X theirs
+            
+            # Stash any leftover trash files so the pull doesn't crash
+            git stash
+            
+            # Safely pull and push
+            git pull origin main --rebase || git pull origin master --rebase
             git push origin main || git push origin master
           else
             echo "No changes to commit."
