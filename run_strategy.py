@@ -22,7 +22,13 @@ INITIAL_CAPITAL = 1000000.0
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
-print(f"Running Standalone EOD Strategy (T+1 Open Execution). Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
+# Time-based Phase Detection
+# >= 15 (3:00 PM IST) means Market Close / Decision Phase
+# < 15 (e.g. 9:30 AM IST) means Market Open / Execution Phase
+is_decision_phase = now_ist.hour >= 15 
+phase_name = "DECISION PHASE (Generating Signals)" if is_decision_phase else "EXECUTION PHASE (Fulfilling Trades)"
+
+print(f"Running Standalone EOD Strategy -> {phase_name}. Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ==========================================
 # 1. LOAD TICKERS & FETCH YFINANCE DATA
@@ -98,7 +104,6 @@ st_df = pd.concat(st_list)
 df['ST_15_3'] = st_df['ST_15_3']
 df['ST_DIR'] = st_df['ST_DIR']
 
-# --- FIX 1: Match the Dashboard's RS Weighting and allow missing 12M data ---
 df['Weighted Avg'] = (0.40 * df['3M_Return'].fillna(0)) + \
                      (0.20 * df['6M_Return'].fillna(0)) + \
                      (0.20 * df['9M_Return'].fillna(0)) + \
@@ -107,11 +112,13 @@ df['Weighted Avg'] = (0.40 * df['3M_Return'].fillna(0)) + \
 df['RS'] = df.groupby('DATE')['Weighted Avg'].rank(pct=True) * 100
 df['RS'] = df['RS'].round(0).clip(lower=1, upper=99)
 
-# --- FIX 2: Stop deleting stocks that don't have 12M_Return history ---
 df_bt = df.dropna(subset=['SMA_200', 'RS', 'ST_15_3']).copy()
 
 df_bt = pd.merge(df_bt, index_regime, on='DATE', how='left')
 df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
+
+# Re-sort to ensure chronologically safe shifting
+df_bt = df_bt.sort_values(by=['TICKER', 'DATE']).reset_index(drop=True)
 
 # ==========================================
 # 3. SIGNAL LOGIC & T+1 SHIFTING
@@ -119,7 +126,6 @@ df_bt['Index_ST_DIR'] = df_bt['Index_ST_DIR'].ffill().fillna('Up')
 is_not_circuit = df_bt['HIGH'] != df_bt['LOW']
 is_index_down = df_bt['Index_ST_DIR'] == 'Down'
 
-# --- FIX 3: Dynamic RS Threshold (Nifty Regime Check) ---
 rsi_threshold = 55
 return_1d_threshold = -0.05
 rs_score_threshold = np.where(is_index_down, 95, 80)
@@ -180,7 +186,7 @@ for current_date in unique_dates:
             sell_reason = ""
             exit_price = 0
 
-            # 1. EOD Indicator Sells (Evaluated yesterday, executed at Open today)
+            # 1. EOD Indicator Sells
             if pd.notna(prev_close) and pd.notna(prev_st) and prev_close < prev_st:
                 exit_price = today_open
                 sell_reason = "Close < ST(15,3) (T-1)"
@@ -222,7 +228,7 @@ for current_date in unique_dates:
 
     for t in tickers_to_remove: del positions[t]
 
-    # Process Buys (Evaluated yesterday, executed at Open today)
+    # Process Buys
     buy_signals = daily_data[daily_data['Prev_Buy_Signal']].sort_values(by='Prev_RS', ascending=False)
 
     for ticker, row in buy_signals.iterrows():
@@ -230,7 +236,12 @@ for current_date in unique_dates:
         if len(positions) < MAX_POSITIONS and ticker not in positions:
             
             invest_amount = POSITION_SIZE if capital >= POSITION_SIZE else capital
+            
+            # Fallback for yfinance live intraday Open missing data glitch
             execution_price = row['OPEN'] 
+            if pd.isna(execution_price) or execution_price == 0:
+                execution_price = row['CLOSE']
+                
             net_buy_price = execution_price * (1 + BROKERAGE_RATE)
 
             if invest_amount > net_buy_price:
@@ -239,7 +250,8 @@ for current_date in unique_dates:
                 total_brokerage += execution_price * qty * BROKERAGE_RATE
                 positions[ticker] = {
                     'raw_entry_price': execution_price, 'net_entry_price': net_buy_price, 'qty': qty, 
-                    'entry_date': current_date, 'index_st': row['Index_ST_DIR'], 'is_new': False,
+                    'entry_date': current_date, 'index_st': row['Index_ST_DIR'], 
+                    'is_new': (current_date.date() == now_ist.date()), # Flags as new only if executed TODAY
                     'rsi': round(row['Prev_RSI_14'], 2) if pd.notna(row['Prev_RSI_14']) else 0,
                     'ret_3m': round(row['Prev_3M_Return'] * 100, 2) if pd.notna(row['Prev_3M_Return']) else 0,
                     'ret_6m': round(row['Prev_6M_Return'] * 100, 2) if pd.notna(row['Prev_6M_Return']) else 0,
@@ -261,15 +273,9 @@ for current_date in unique_dates:
 # ==========================================
 # 5. PREPARE TODAY'S TARGETS (DASHBOARD OUTPUT)
 # ==========================================
-# ==========================================
-# 5. PREPARE TODAY'S TARGETS (DASHBOARD OUTPUT)
-# ==========================================
 print("Preparing Output Files...")
 latest_date = unique_dates[-1]
 
-# --- THE FIX: YFinance Delay Handler ---
-# Instead of strictly filtering by latest_date, we grab the most recent row for EACH ticker.
-# We also apply a 5-day cutoff just to ensure we don't accidentally buy a stock that was delisted months ago!
 recent_cutoff = latest_date - pd.Timedelta(days=5)
 last_day_data = df_bt[df_bt['DATE'] >= recent_cutoff].groupby('TICKER').tail(1).set_index('TICKER')
 
@@ -278,41 +284,42 @@ latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 sells_for_tomorrow = []
 sell_rows_for_export = [] 
 
-# Check for Sells based on TODAY'S closing indicators (Act Tomorrow Open)
-for ticker, pos in positions.items():
-    if ticker in last_day_data.index:
-        row = last_day_data.loc[ticker]
-        todays_close, todays_st, todays_sma = row['CLOSE'], row['ST_15_3'], row['SMA_200']
-        
-        if pd.notna(todays_close) and ((pd.notna(todays_st) and todays_close < todays_st) or (pd.notna(todays_sma) and todays_close < todays_sma)):
-            sells_for_tomorrow.append(ticker)
+# ONLY generate new decisions if running after 3 PM (The 4:00 PM Run)
+if is_decision_phase:
+    # Check for Sells based on TODAY'S closing indicators
+    for ticker, pos in list(positions.items()): # list() protects against dictionary resizing
+        if ticker in last_day_data.index:
+            row = last_day_data.loc[ticker]
+            todays_close, todays_st, todays_sma = row['CLOSE'], row['ST_15_3'], row['SMA_200']
             
-            sell_rows_for_export.append({
-                'Ticker': ticker, 'Action': 'SELL',
-                'Entry_Price': round(pos['raw_entry_price'], 2), 
-                'Quantity': pos['qty'], 'Stoploss': '-',
-                'Allocation_%': round(((pos['qty'] * pos['raw_entry_price']) / latest_equity) * 100, 2) if latest_equity > 0 else 0,
-                'Entry_Date': pos['entry_date']
-            })
+            if pd.notna(todays_close) and ((pd.notna(todays_st) and todays_close < todays_st) or (pd.notna(todays_sma) and todays_close < todays_sma)):
+                sells_for_tomorrow.append(ticker)
+                
+                sell_rows_for_export.append({
+                    'Ticker': ticker, 'Action': 'SELL',
+                    'Entry_Price': round(todays_close, 2), # Directly show sold at close price
+                    'Quantity': pos['qty'], 'Stoploss': '-',
+                    'Allocation_%': round(((pos['qty'] * todays_close) / latest_equity) * 100, 2) if latest_equity > 0 else 0,
+                    'Entry_Date': pos['entry_date']
+                })
 
-for t in sells_for_tomorrow: del positions[t]
+    for t in sells_for_tomorrow: del positions[t]
 
-# Check for Buys based on TODAY'S closing indicators (Act Tomorrow Open)
-buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS', ascending=False)
+    # Check for Buys based on TODAY'S closing indicators
+    buy_candidates = last_day_data[last_day_data['Buy_Signal']].sort_values(by='RS', ascending=False)
 
-for ticker, row in buy_candidates.iterrows():
-    # --- BUDGET CHECK: Stops expensive stocks from getting stuck in "Pending" ---
-    estimated_cost = row['CLOSE'] * (1 + BROKERAGE_RATE)
-    available_budget = POSITION_SIZE if capital >= POSITION_SIZE else capital
+    for ticker, row in buy_candidates.iterrows():
+        estimated_cost = row['CLOSE'] * (1 + BROKERAGE_RATE)
+        available_budget = POSITION_SIZE if capital >= POSITION_SIZE else capital
 
-    if len(positions) < MAX_POSITIONS and ticker not in positions:
-        if available_budget > estimated_cost:
-            positions[ticker] = {
-                'raw_entry_price': 'Pending Next Open', 'net_entry_price': '-', 'qty': 'TBD',
-                'entry_date': 'Pending Next Open', 'index_st': row['Index_ST_DIR'], 'is_new': True 
-            }
-        else:
-            print(f"Skipping {ticker} on Dashboard: Cannot afford 1 share. Price: {row['CLOSE']:.2f}, Budget: {available_budget:.2f}")
+        if len(positions) < MAX_POSITIONS and ticker not in positions:
+            if available_budget > estimated_cost:
+                positions[ticker] = {
+                    'raw_entry_price': '-', 'net_entry_price': '-', 'qty': '-',
+                    'entry_date': 'Pending Next Open', 'index_st': row['Index_ST_DIR'], 'is_new': True 
+                }
+            else:
+                print(f"Skipping {ticker} on Dashboard: Cannot afford 1 share.")
 
 # --- File 1: Allocations Output ---
 alloc_list = []
@@ -321,10 +328,10 @@ for t, p in positions.items():
     sl_multiplier = 0.85 if p.get('index_st', 'Up') == 'Down' else 0.87
     action = 'BUY' if p.get('is_new', False) else 'HOLD'
     
-    if p['raw_entry_price'] == 'Pending Next Open':
+    if p['raw_entry_price'] == '-':
         alloc_list.append({
-            'Ticker': t, 'Action': action, 'Entry_Price': 'Pending Next Open',
-            'Quantity': 'TBD', 'Stoploss': '-', 'Allocation_%': 'TBD', 'Entry_Date': 'Pending Next Open'
+            'Ticker': t, 'Action': action, 'Entry_Price': '-',
+            'Quantity': '-', 'Stoploss': '-', 'Allocation_%': '-', 'Entry_Date': 'Pending Next Open'
         })
     else:
         alloc_list.append({
@@ -343,26 +350,20 @@ print(f"✅ Success! Generated targets in {FILE_1_ALLOCATIONS}")
 # --- File 2: Historical Portfolio Value Output ---
 equity_df = pd.DataFrame(equity_curve)
 
-# Merge Nifty 500 Close values to calculate Benchmark_Value
 nifty500_close = nifty500_data[['DATE', 'CLOSE']].rename(columns={'CLOSE': 'Nifty500_Value'})
 equity_df = pd.merge(equity_df, nifty500_close, on='DATE', how='left')
 equity_df['Nifty500_Value'] = equity_df['Nifty500_Value'].ffill()
 
-# Calculate Benchmark_Value using Nifty 500
 if not equity_df['Nifty500_Value'].isna().all():
     first_valid_nifty500 = equity_df['Nifty500_Value'].dropna().iloc[0]
     equity_df['Benchmark_Value'] = (equity_df['Nifty500_Value'] / first_valid_nifty500) * INITIAL_CAPITAL
 else:
     equity_df['Benchmark_Value'] = INITIAL_CAPITAL
 
-# Add Drawdown and Daily Return columns
 equity_df['Drawdown'] = equity_df['Equity'] / equity_df['Equity'].cummax() - 1
 equity_df['Daily_Return'] = equity_df['Equity'].pct_change()
 
-# DROP the raw index value before exporting to CSV
 equity_df.drop(columns=['Nifty500_Value'], inplace=True, errors='ignore')
-
-# Save to CSV
 equity_df.to_csv(FILE_2_PORTFOLIO, index=False)
 print(f"✅ Success! Saved history to {FILE_2_PORTFOLIO}")
 
@@ -384,7 +385,7 @@ if trades:
 
 if positions:
     for ticker, pos in positions.items():
-        if pos['raw_entry_price'] != 'Pending Next Open':
+        if pos['raw_entry_price'] != '-':
             entry_date = pos['entry_date'].date() if hasattr(pos['entry_date'], 'date') else pos['entry_date']
             transaction_ledger.append({
                 'Ticker': ticker, 'Action': 'BOUGHT', 'Date': entry_date, 'Price': round(pos['net_entry_price'], 2), 'Quantity': pos['qty'], 'Reason': 'Active Open Position',
