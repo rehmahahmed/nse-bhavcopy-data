@@ -76,12 +76,14 @@ for i, symbol in enumerate(symbols):
         pass
 
     update_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 💥 FIX: Changed the 'else' condition to output 0 instead of np.nan
     fundamental_data.append({
         'Symbol': symbol,
-        'Qtr Profit Var %': round(qtr_profit_var, 2) if pd.notna(qtr_profit_var) else np.nan,
-        'QoQ profits %': round(qoq_profit, 2) if pd.notna(qoq_profit) else np.nan,
-        'QoQ sales %': round(qoq_sales, 2) if pd.notna(qoq_sales) else np.nan,
-        'OPM': round(opm, 2) if pd.notna(opm) else np.nan,
+        'Qtr Profit Var %': round(qtr_profit_var, 2) if pd.notna(qtr_profit_var) else 0,
+        'QoQ profits %': round(qoq_profit, 2) if pd.notna(qoq_profit) else 0,
+        'QoQ sales %': round(qoq_sales, 2) if pd.notna(qoq_sales) else 0,
+        'OPM': round(opm, 2) if pd.notna(opm) else 0,
         'Last_Updated': update_time_str
     })
     
@@ -100,6 +102,9 @@ df_new = pd.merge(df_nifty750[['Symbol', 'Industry']], df_new, on='Symbol', how=
 # Clean up column order
 final_cols = ['Symbol', 'Industry', 'Qtr Profit Var %', 'QoQ profits %', 'QoQ sales %', 'OPM', 'Last_Updated']
 df_new = df_new[final_cols]
+
+# 💥 FIX: Final safety net to convert any lingering NaNs to 0 before saving
+df_new.fillna(0, inplace=True)
 
 # Overwrite the file entirely since we fetch all 750 stocks in one go now
 df_new.to_csv(OUTPUT_FILE, index=False)
