@@ -7,7 +7,7 @@ import pyotp
 import os
 from SmartApi import SmartConnect
 import warnings
-import yfinance as yf # <-- ADDED YFINANCE
+import yfinance as yf
 
 warnings.filterwarnings('ignore')
 
@@ -20,16 +20,16 @@ PIN = os.environ.get("ANGEL_PIN")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
 
 INPUT_FILE = "nifty750list.csv"
-OUTPUT_FILE = "market_breadth_history_5yr.csv"
+OUTPUT_FILE = "market_breadth_history_2015.csv"
 INTERVAL = "ONE_DAY"
 
-# --- 5-Year Time Calculation with DMA Padding ---
+# --- 2015 Time Calculation with DMA Padding ---
 end_date = datetime.datetime.now()
-five_years_ago = end_date - datetime.timedelta(days=11 * 365)
+target_start_date = datetime.datetime(2015, 1, 1)
 
-# We need 200 trading days (~300 calendar days) BEFORE our 5-year start date 
-# so the 200 SMA can calculate properly on day one.
-start_date = five_years_ago - datetime.timedelta(days=300)
+# We need 200 trading days (~300 calendar days) BEFORE our 2015 start date 
+# so the 200 SMA can calculate properly on day one (January 2015).
+start_date = target_start_date - datetime.timedelta(days=300)
 
 TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
 FROM_DATE = start_date.strftime("%Y-%m-%d 09:15")
@@ -68,7 +68,7 @@ except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
     exit()
 
-print(f"Fetching ~6 years of history (to pad the 200 SMA) for {len(symbols)} stocks...")
+print(f"Fetching history since early 2014 (to pad the 200 SMA) for {len(symbols)} stocks...")
 print("This will take roughly 30 to 45 minutes to avoid API bans. Please wait...")
 raw_data_rows = []
 
@@ -131,7 +131,7 @@ df_close = df_close.sort_index()
 sma_200 = df_close.rolling(window=200).mean()
 
 # ==========================================
-# 5. AGGREGATE COUNTS & SAVE (EXACTLY 5 YEARS)
+# 5. AGGREGATE COUNTS & SAVE (EXACTLY FROM 2015)
 # ==========================================
 print("Aggregating breadth metric by Nifty 750 and Sectors...")
 
@@ -157,8 +157,8 @@ for ind, syms in industry_groups.items():
     # Only checks the stocks belonging to that specific industry array
     df_breadth[ind] = (df_close[syms] > sma_200[syms]).sum(axis=1)
 
-# Slice the dataframe to exactly the 5-year mark
-cutoff_date_str = five_years_ago.strftime('%Y-%m-%d')
+# Slice the dataframe to exactly the 2015 mark
+cutoff_date_str = target_start_date.strftime('%Y-%m-%d')
 df_breadth = df_breadth.loc[cutoff_date_str:]
 
 # Convert the Date index back into a standard column for merging
@@ -196,6 +196,6 @@ else:
 
 df_breadth.to_csv(OUTPUT_FILE, index=False)
 
-print(f"\n[SUCCESS] Generated exact 5-year breadth history (Starting {cutoff_date_str}).")
+print(f"\n[SUCCESS] Generated breadth history (Starting {cutoff_date_str}).")
 print(f"Saved to {OUTPUT_FILE}")
 print(f"Total trading days recorded: {len(df_breadth)}")
