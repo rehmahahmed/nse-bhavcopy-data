@@ -22,10 +22,14 @@ INITIAL_CAPITAL = 1000000.0
 ist = pytz.timezone('Asia/Kolkata')
 now_ist = datetime.now(ist)
 
-# Time-based Phase Detection
-# >= 15 (3:00 PM IST) means Market Close / Decision Phase
-# < 15 (e.g. 9:30 AM IST) means Market Open / Execution Phase
-is_decision_phase = now_ist.hour >= 15 
+# --- TIME-BASED PHASE DETECTION ---
+# Execution Phase: 9:30 AM to 3:40 PM (No decisions, only updates)
+# Decision Phase: 3:40 PM to 9:30 AM (Generates new Buy/Sell signals)
+current_minutes = now_ist.hour * 60 + now_ist.minute
+market_open_minutes = 9 * 60 + 30   # 9:30 AM (570 minutes)
+market_close_minutes = 15 * 60 + 40 # 3:40 PM (940 minutes)
+
+is_decision_phase = not (market_open_minutes <= current_minutes < market_close_minutes)
 phase_name = "DECISION PHASE (Generating Signals)" if is_decision_phase else "EXECUTION PHASE (Fulfilling Trades)"
 
 print(f"Running Standalone EOD Strategy -> {phase_name}. Time (IST): {now_ist.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -284,7 +288,7 @@ latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
 sells_for_tomorrow = []
 sell_rows_for_export = [] 
 
-# ONLY generate new decisions if running after 3 PM (The 4:00 PM Run)
+# ONLY generate new decisions if running after 3:40 PM or before 9:30 AM (Decision Phase)
 if is_decision_phase:
     # Check for Sells based on TODAY'S closing indicators
     for ticker, pos in list(positions.items()): # list() protects against dictionary resizing
@@ -315,7 +319,7 @@ if is_decision_phase:
         if len(positions) < MAX_POSITIONS and ticker not in positions:
             if available_budget > estimated_cost:
                 positions[ticker] = {
-                    'raw_entry_price': '-', 'net_entry_price': '-', 'qty': '-',
+                    'raw_entry_price': 'Pending Next Open', 'net_entry_price': '-', 'qty': 'TBD',
                     'entry_date': 'Pending Next Open', 'index_st': row['Index_ST_DIR'], 'is_new': True 
                 }
             else:
@@ -328,10 +332,10 @@ for t, p in positions.items():
     sl_multiplier = 0.85 if p.get('index_st', 'Up') == 'Down' else 0.87
     action = 'BUY' if p.get('is_new', False) else 'HOLD'
     
-    if p['raw_entry_price'] == '-':
+    if p['raw_entry_price'] == 'Pending Next Open':
         alloc_list.append({
-            'Ticker': t, 'Action': action, 'Entry_Price': '-',
-            'Quantity': '-', 'Stoploss': '-', 'Allocation_%': '-', 'Entry_Date': 'Pending Next Open'
+            'Ticker': t, 'Action': action, 'Entry_Price': 'Pending Next Open',
+            'Quantity': 'TBD', 'Stoploss': '-', 'Allocation_%': 'TBD', 'Entry_Date': 'Pending Next Open'
         })
     else:
         alloc_list.append({
@@ -385,7 +389,7 @@ if trades:
 
 if positions:
     for ticker, pos in positions.items():
-        if pos['raw_entry_price'] != '-':
+        if pos['raw_entry_price'] != 'Pending Next Open':
             entry_date = pos['entry_date'].date() if hasattr(pos['entry_date'], 'date') else pos['entry_date']
             transaction_ledger.append({
                 'Ticker': ticker, 'Action': 'BOUGHT', 'Date': entry_date, 'Price': round(pos['net_entry_price'], 2), 'Quantity': pos['qty'], 'Reason': 'Active Open Position',
