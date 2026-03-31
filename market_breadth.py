@@ -20,7 +20,6 @@ PIN = os.environ.get("ANGEL_PIN")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
 
 INPUT_FILE = "nifty750list.csv"
-# 💥 REVERTED TO OLD NAME
 OUTPUT_FILE = "market_breadth_history_5yr.csv"
 INTERVAL = "ONE_DAY"
 
@@ -31,9 +30,6 @@ target_start_date = datetime.datetime(2015, 1, 1)
 # We need 200 trading days (~300 calendar days) BEFORE our 2015 start date 
 # so the 200 SMA can calculate properly on day one (January 2015).
 start_date = target_start_date - datetime.timedelta(days=300)
-
-TO_DATE = end_date.strftime("%Y-%m-%d 15:30")
-FROM_DATE = start_date.strftime("%Y-%m-%d 09:15")
 
 # ==========================================
 # 2. LOGIN & FETCH TOKENS
@@ -70,46 +66,57 @@ except Exception as e:
     exit()
 
 print(f"Fetching history since early 2014 (to pad the 200 SMA) for {len(symbols)} stocks...")
-print("This will take roughly 30 to 45 minutes to avoid API bans. Please wait...")
+print("Chunking requests to bypass Angel's 2000-day limit. This will take ~45 minutes. Please wait...")
 raw_data_rows = []
 
 for i, symbol in enumerate(symbols):
     symbol = str(symbol).strip()
     if symbol not in token_map: continue
 
-    historicParam = {
-        "exchange": "NSE", "symboltoken": token_map[symbol],
-        "interval": "ONE_DAY", "fromdate": FROM_DATE, "todate": TO_DATE
-    }
+    # 💥 THE FIX: Chunking the date range (1500 days at a time)
+    current_start = start_date
+    chunk_days = 1500
 
-    # RETRY LOGIC FOR RATE LIMITS AND NULLS
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            hist_data = smartApi.getCandleData(historicParam)
-            
-            if hist_data and hist_data.get('status') and hist_data.get('data'):
-                for row in hist_data['data']:
-                    raw_data_rows.append({
-                        'Date': row[0][:10],
-                        'Symbol': symbol,
-                        'Close': row[4]
-                    })
-                break 
-            
-            elif hist_data and hist_data.get('errorcode') == 'AB1004':
-                print(f"Rate limited on {symbol}. Cooling down for 3s... (Attempt {attempt+1}/{max_retries})")
-                time.sleep(3) 
-            
-            else:
-                break 
+    while current_start < end_date:
+        current_end = min(current_start + datetime.timedelta(days=chunk_days), end_date)
+        
+        historicParam = {
+            "exchange": "NSE", "symboltoken": token_map[symbol],
+            "interval": "ONE_DAY", 
+            "fromdate": current_start.strftime("%Y-%m-%d 09:15"), 
+            "todate": current_end.strftime("%Y-%m-%d 15:30")
+        }
 
-        except Exception as e:
-            print(f"Network error on {symbol}: {e}. Retrying...")
-            time.sleep(2)
-            
-    time.sleep(0.6) 
-    
+        # RETRY LOGIC FOR RATE LIMITS AND NULLS
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                hist_data = smartApi.getCandleData(historicParam)
+                
+                if hist_data and hist_data.get('status') and hist_data.get('data'):
+                    for row in hist_data['data']:
+                        raw_data_rows.append({
+                            'Date': row[0][:10],
+                            'Symbol': symbol,
+                            'Close': row[4]
+                        })
+                    break 
+                
+                elif hist_data and hist_data.get('errorcode') == 'AB1004':
+                    print(f"Rate limited on {symbol}. Cooling down for 3s... (Attempt {attempt+1}/{max_retries})")
+                    time.sleep(3) 
+                
+                else:
+                    break 
+
+            except Exception as e:
+                print(f"Network error on {symbol}: {e}. Retrying...")
+                time.sleep(2)
+                
+        # Move to the next chunk
+        current_start = current_end + datetime.timedelta(days=1)
+        time.sleep(0.4) # Respect Angel's 3 requests/second limit
+        
     if (i + 1) % 50 == 0:
         print(f"Processed {i + 1} / {len(symbols)} stocks...")
 
@@ -120,8 +127,11 @@ if not raw_data_rows:
     print("No data fetched from Angel API. Exiting.")
     exit()
 
-print("\nPivoting data and calculating the 200 SMA...")
+print("\nCleaning data, pivoting, and calculating the 200 SMA...")
 df_all = pd.DataFrame(raw_data_rows)
+
+# 💥 SAFETY FIX: Remove any duplicate rows created by overlapping date chunks
+df_all.drop_duplicates(subset=['Date', 'Symbol'], keep='last', inplace=True)
 
 # Pivot so Dates are rows and Symbols are columns
 df_close = df_all.pivot(index='Date', columns='Symbol', values='Close')
