@@ -1,0 +1,48 @@
+name: Weekly Nifty/VIX Ratio
+
+on:
+  schedule:
+    # Runs at 11:30 AM UTC (5:00 PM IST) every Friday
+    - cron: '30 11 * * 5'
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+  contents: write 
+
+jobs:
+  run-weekly-ratio:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas yfinance
+
+      - name: Run Nifty VIX Script
+        run: python nifty_vix_weekly.py
+
+      - name: Commit and Push Updated CSV
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          if [ -f nifty_vix_ratio_weekly.csv ]; then
+            git add nifty_vix_ratio_weekly.csv
+            git commit -m "Automated weekly Nifty/VIX ratio update" || echo "No changes to commit"
+            git stash
+            git pull origin main --rebase || git pull origin master --rebase
+            git push origin main || git push origin master
+          else
+            echo "CSV file was not found! The Python script likely failed. Skipping commit."
+          fi
