@@ -1,30 +1,17 @@
 import pandas as pd
 import datetime
-import time
-import urllib.request
-import json
-import pyotp
-import os
-from SmartApi import SmartConnect
-import warnings
 import yfinance as yf
+import warnings
 
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. CREDENTIALS & CONFIGURATION
+# 1. CONFIGURATION
 # ==========================================
-API_KEY = os.environ.get("ANGEL_API_KEY")
-CLIENT_CODE = os.environ.get("ANGEL_CLIENT_CODE")
-PIN = os.environ.get("ANGEL_PIN")
-TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET")
-
 INPUT_FILE = "nifty750list.csv"
 OUTPUT_FILE = "market_breadth_history_5yr.csv"
-INTERVAL = "ONE_DAY"
 
 # --- 2015 Time Calculation with DMA Padding ---
-end_date = datetime.datetime.now()
 target_start_date = datetime.datetime(2015, 1, 1)
 
 # We need 200 trading days (~300 calendar days) BEFORE our 2015 start date 
@@ -32,27 +19,7 @@ target_start_date = datetime.datetime(2015, 1, 1)
 start_date = target_start_date - datetime.timedelta(days=300)
 
 # ==========================================
-# 2. LOGIN & FETCH TOKENS
-# ==========================================
-print("Logging into Angel One...")
-smartApi = SmartConnect(api_key=API_KEY)
-totp = pyotp.TOTP(TOTP_SECRET).now()
-login_data = smartApi.generateSession(CLIENT_CODE, PIN, totp)
-
-if not login_data['status']:
-    print("Login Failed:", login_data['message'])
-    exit()
-
-print("Fetching instrument tokens...")
-instrument_url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
-response = urllib.request.urlopen(instrument_url)
-instrument_list = json.loads(response.read())
-
-token_map = {inst['symbol'].replace('-EQ', ''): inst['token'] 
-             for inst in instrument_list if inst['exch_seg'] == 'NSE' and inst['symbol'].endswith('-EQ')}
-
-# ==========================================
-# 3. LOAD SYMBOLS, INDUSTRY MAPPING & FETCH DATA
+# 2. LOAD SYMBOLS & INDUSTRY MAPPING
 # ==========================================
 try:
     df_tickers = pd.read_csv(INPUT_FILE)
@@ -65,78 +32,37 @@ except Exception as e:
     print(f"Error reading {INPUT_FILE}: {e}")
     exit()
 
-print(f"Fetching history since early 2014 (to pad the 200 SMA) for {len(symbols)} stocks...")
-print("Chunking requests to bypass Angel's 2000-day limit. This will take ~45 minutes. Please wait...")
-raw_data_rows = []
+# Format symbols for Yahoo Finance (add .NS for NSE)
+yf_tickers = [f"{sym}.NS" for sym in symbols]
 
-for i, symbol in enumerate(symbols):
-    symbol = str(symbol).strip()
-    if symbol not in token_map: continue
+# ==========================================
+# 3. FETCH HISTORICAL DATA IN BULK
+# ==========================================
+print(f"Fetching history since 2014 for {len(yf_tickers)} stocks via YFinance...")
+print("This takes roughly 1 to 2 minutes. Please wait...")
 
-    # 💥 THE FIX: Chunking the date range (1500 days at a time)
-    current_start = start_date
-    chunk_days = 1500
+# yfinance bulk download is vastly faster and prevents missing data chunks
+raw_data = yf.download(yf_tickers, start=start_date.strftime("%Y-%m-%d"), progress=False, auto_adjust=False)
 
-    while current_start < end_date:
-        current_end = min(current_start + datetime.timedelta(days=chunk_days), end_date)
-        
-        historicParam = {
-            "exchange": "NSE", "symboltoken": token_map[symbol],
-            "interval": "ONE_DAY", 
-            "fromdate": current_start.strftime("%Y-%m-%d 09:15"), 
-            "todate": current_end.strftime("%Y-%m-%d 15:30")
-        }
+if raw_data.empty:
+    print("No data fetched. Exiting.")
+    exit()
 
-        # RETRY LOGIC FOR RATE LIMITS AND NULLS
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                hist_data = smartApi.getCandleData(historicParam)
-                
-                if hist_data and hist_data.get('status') and hist_data.get('data'):
-                    for row in hist_data['data']:
-                        raw_data_rows.append({
-                            'Date': row[0][:10],
-                            'Symbol': symbol,
-                            'Close': row[4]
-                        })
-                    break 
-                
-                elif hist_data and hist_data.get('errorcode') == 'AB1004':
-                    print(f"Rate limited on {symbol}. Cooling down for 3s... (Attempt {attempt+1}/{max_retries})")
-                    time.sleep(3) 
-                
-                else:
-                    break 
+# Extract only the "Close" prices from the MultiIndex dataframe
+if isinstance(raw_data.columns, pd.MultiIndex):
+    df_close = raw_data['Close']
+else:
+    df_close = raw_data[['Close']]
 
-            except Exception as e:
-                print(f"Network error on {symbol}: {e}. Retrying...")
-                time.sleep(2)
-                
-        # Move to the next chunk
-        current_start = current_end + datetime.timedelta(days=1)
-        time.sleep(0.4) # Respect Angel's 3 requests/second limit
-        
-    if (i + 1) % 50 == 0:
-        print(f"Processed {i + 1} / {len(symbols)} stocks...")
+# Strip the '.NS' suffix so column names match our industry_map exactly
+df_close.columns = [str(col).replace('.NS', '') for col in df_close.columns]
 
 # ==========================================
 # 4. CALCULATE HISTORICAL METRICS
 # ==========================================
-if not raw_data_rows:
-    print("No data fetched from Angel API. Exiting.")
-    exit()
-
-print("\nCleaning data, pivoting, and calculating the 200 SMA...")
-df_all = pd.DataFrame(raw_data_rows)
-
-# 💥 SAFETY FIX: Remove any duplicate rows created by overlapping date chunks
-df_all.drop_duplicates(subset=['Date', 'Symbol'], keep='last', inplace=True)
-
-# Pivot so Dates are rows and Symbols are columns
-df_close = df_all.pivot(index='Date', columns='Symbol', values='Close')
-df_close.index = pd.to_datetime(df_close.index)
-df_close = df_close.sort_index()
+print("Calculating the 200 SMA...")
+# Forward fill NA values slightly to prevent 1-day API glitches from zeroing out breadth
+df_close = df_close.ffill()
 
 # Calculate the 200 Simple Moving Average for the entire matrix
 sma_200 = df_close.rolling(window=200).mean()
@@ -158,15 +84,19 @@ df_breadth['Total_Above_200_SMA'] = (df_close > sma_200).sum(axis=1)
 industry_groups = {}
 for sym in fetched_symbols:
     ind = industry_map.get(sym, 'Unknown Sector')
-    if pd.isna(ind): ind = 'Unknown Sector' # Handle any blank industry rows
+    if pd.isna(ind): ind = 'Unknown Sector'
     
     if ind not in industry_groups:
         industry_groups[ind] = []
     industry_groups[ind].append(sym)
 
 for ind, syms in industry_groups.items():
-    # Only checks the stocks belonging to that specific industry array
-    df_breadth[ind] = (df_close[syms] > sma_200[syms]).sum(axis=1)
+    # Filter to only the symbols that actually successfully downloaded
+    valid_syms = [s for s in syms if s in df_close.columns]
+    if valid_syms:
+        df_breadth[ind] = (df_close[valid_syms] > sma_200[valid_syms]).sum(axis=1)
+    else:
+        df_breadth[ind] = 0
 
 # Slice the dataframe to exactly the 2015 mark
 cutoff_date_str = target_start_date.strftime('%Y-%m-%d')
@@ -180,14 +110,13 @@ df_breadth['Date'] = df_breadth['Date'].dt.strftime('%Y-%m-%d')
 print("Fetching Index data to overlay with breadth...")
 # Trying a 750 proxy first, falling back to standard 500
 index_ticker = "NIFTY_750.NS" 
-idx_data = yf.download(index_ticker, start=cutoff_date_str, progress=False)
+idx_data = yf.download(index_ticker, start=cutoff_date_str, progress=False, auto_adjust=False)
 
 if idx_data.empty:
     print(f"{index_ticker} not found. Falling back to Nifty 500 (^CRSLDX) for benchmark correlation...")
-    idx_data = yf.download("^CRSLDX", start=cutoff_date_str, progress=False)
+    idx_data = yf.download("^CRSLDX", start=cutoff_date_str, progress=False, auto_adjust=False)
 
 if not idx_data.empty:
-    # Clean up multi-index columns from yfinance if present
     if isinstance(idx_data.columns, pd.MultiIndex):
         idx_data.columns = idx_data.columns.droplevel(1)
         
@@ -198,7 +127,7 @@ if not idx_data.empty:
     # Merge on the exact dates we have breadth data for
     df_breadth = pd.merge(df_breadth, idx_data, on='Date', how='left')
     
-    # Forward-fill index prices in case the API missed a specific holiday/trading day discrepancy
+    # Forward-fill index prices in case the API missed a specific holiday
     df_breadth['Index_Close'] = df_breadth['Index_Close'].ffill()
 else:
     print("Warning: Could not fetch index data.")
@@ -207,6 +136,6 @@ else:
 
 df_breadth.to_csv(OUTPUT_FILE, index=False)
 
-print(f"\n[SUCCESS] Generated breadth history (Starting {cutoff_date_str}).")
+print(f"\n[SUCCESS] Generated clean breadth history (Starting {cutoff_date_str}).")
 print(f"Saved to {OUTPUT_FILE}")
 print(f"Total trading days recorded: {len(df_breadth)}")
