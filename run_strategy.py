@@ -283,8 +283,6 @@ latest_date = unique_dates[-1]
 recent_cutoff = latest_date - pd.Timedelta(days=5)
 last_day_data = df_bt[df_bt['DATE'] >= recent_cutoff].groupby('TICKER').tail(1).set_index('TICKER')
 
-latest_equity = equity_curve[-1]['Equity'] if equity_curve else INITIAL_CAPITAL
-
 sells_for_tomorrow = []
 sell_rows_for_export = [] 
 
@@ -303,7 +301,7 @@ if is_decision_phase:
                     'Ticker': ticker, 'Action': 'SELL',
                     'Entry_Price': round(todays_close, 2), # Directly show sold at close price
                     'Quantity': pos['qty'], 'Stoploss': '-',
-                    'Allocation_%': round(((pos['qty'] * todays_close) / latest_equity) * 100, 2) if latest_equity > 0 else 0,
+                    'Allocation_%': round(((pos['qty'] * todays_close) / INITIAL_CAPITAL) * 100, 2),
                     'Entry_Date': pos['entry_date']
                 })
 
@@ -335,13 +333,13 @@ for t, p in positions.items():
     if p['raw_entry_price'] == 'Pending Next Open':
         alloc_list.append({
             'Ticker': t, 'Action': action, 'Entry_Price': 'Pending Next Open',
-            'Quantity': 'TBD', 'Stoploss': '-', 'Allocation_%': 'TBD', 'Entry_Date': 'Pending Next Open'
+            'Quantity': 'TBD', 'Stoploss': '-', 'Allocation_%': round((POSITION_SIZE / INITIAL_CAPITAL) * 100, 2), 'Entry_Date': 'Pending Next Open'
         })
     else:
         alloc_list.append({
             'Ticker': t, 'Action': action, 'Entry_Price': round(p['raw_entry_price'], 2), 
             'Quantity': p['qty'], 'Stoploss': round(p['raw_entry_price'] * sl_multiplier, 2), 
-            'Allocation_%': round(((p['qty'] * p['raw_entry_price']) / latest_equity) * 100, 2) if latest_equity > 0 else 0, 
+            'Allocation_%': round(((p['qty'] * p['raw_entry_price']) / INITIAL_CAPITAL) * 100, 2), 
             'Entry_Date': p['entry_date']
         })
 
