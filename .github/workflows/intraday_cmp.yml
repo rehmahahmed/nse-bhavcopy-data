@@ -1,15 +1,18 @@
-name: 45-Min Live Market Price Update
+name: 10-Min Live Market Price Update
 
 on:
   schedule:
-    - cron: '45 2 * * 1-5'  # 08:15 AM IST
-    - cron: '30 3 * * 1-5'  # 09:00 AM IST
-    - cron: '45 4 * * 1-5'  # 10:15 AM IST
-    - cron: '45 5 * * 1-5'  # 11:15 AM IST
-    - cron: '45 6 * * 1-5'  # 12:15 PM IST
-    - cron: '45 7 * * 1-5'  # 01:15 PM IST
-    - cron: '45 8 * * 1-5'  # 02:15 PM IST
-    - cron: '45 9 * * 1-5'  # 03:15 PM IST
+    # 03:45 UTC = 09:15 AM IST (Market Open)
+    # 03:55 UTC = 09:25 AM IST
+    - cron: '45,55 3 * * 1-5'
+    
+    # 04:00 to 09:59 UTC = 09:30 AM to 03:25 PM IST
+    # Runs every 10 minutes at 5, 15, 25, 35, 45, 55 past the hour
+    - cron: '5,15,25,35,45,55 4-9 * * 1-5'
+    
+    # 10:05 UTC = 03:35 PM IST (Final closing tick)
+    - cron: '5 10 * * 1-5'
+    
   workflow_dispatch:
 
 jobs:
