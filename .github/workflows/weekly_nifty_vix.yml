@@ -40,8 +40,15 @@ jobs:
           if [ -f nifty_vix_ratio_weekly.csv ]; then
             git add nifty_vix_ratio_weekly.csv
             git commit -m "Automated weekly Nifty/VIX ratio update" || echo "No changes to commit"
-            git stash
-            git pull origin main --rebase || git pull origin master --rebase
+            
+            # Fetch the latest remote history
+            git fetch origin main || git fetch origin master
+            
+            # Rebase onto the remote branch. 
+            # '-X theirs' forces Git to automatically resolve any conflicts by overwriting 
+            # the remote data with your newly generated local CSV.
+            git rebase origin/main -X theirs || git rebase origin/master -X theirs
+            
             git push origin main || git push origin master
           else
             echo "CSV file was not found! The Python script likely failed. Skipping commit."
